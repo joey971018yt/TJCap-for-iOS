@@ -1,0 +1,47 @@
+name: Windows x64 MSVC Build & Test
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-msvc-win64:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure CMake (Visual Studio 2022 x64)
+        run: cmake -S . -B build-msvc -G "Visual Studio 17 2022" -A x64
+
+      - name: Build Release binaries (MSVC)
+        run: cmake --build build-msvc --config Release --parallel
+
+      - name: Run protocol & media pipeline unit tests on Windows
+        run: .\build-msvc\Release\ios_vcam_tests.exe
+
+      - name: Stage native MSVC release bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "release-msvc-win64\drivers" | Out-Null
+          Copy-Item "build-msvc\Release\ios_vcam_dshow.dll" "release-msvc-win64\"
+          Copy-Item "build-msvc\Release\ios_vcam_host.exe" "release-msvc-win64\"
+          Copy-Item "build-msvc\Release\ios_vcam_driver_setup.exe" "release-msvc-win64\"
+          Copy-Item "build-msvc\Release\ios_vcam_tests.exe" "release-msvc-win64\"
+          Copy-Item "scripts\install_all_admin.ps1" "release-msvc-win64\"
+          Copy-Item "scripts\uninstall_all_admin.ps1" "release-msvc-win64\"
+          Copy-Item "README.md" "release-msvc-win64\"
+          if (Test-Path "dist-win64\libusb-1.0.dll") {
+            Copy-Item "dist-win64\libusb-1.0.dll" "release-msvc-win64\"
+          }
+          if (Test-Path "dist-win64\drivers\*") {
+            Copy-Item "dist-win64\drivers\*" "release-msvc-win64\drivers\"
+          }
+
+      - name: Upload native MSVC Windows x64 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-usb-vcam-msvc-win64
+          path: release-msvc-win64/

@@ -1,0 +1,6 @@
+LIBRARY ios_vcam_dshow
+EXPORTS
+    DllGetClassObject   PRIVATE
+    DllCanUnloadNow     PRIVATE
+    DllRegisterServer   PRIVATE
+    DllUnregisterServer PRIVATE
