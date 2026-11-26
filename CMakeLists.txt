@@ -127,9 +127,14 @@ if(WIN32)
     endif()
 
     # 4. One-Click Graphical Control Center (ios_vcam_gui.exe)
+    if(MSVC)
+        set(IOS_VCAM_GUI_MANIFEST src/gui/ios_vcam_gui.manifest)
+    else()
+        set(IOS_VCAM_GUI_MANIFEST src/gui/ios_vcam_gui.rc)
+    endif()
     add_executable(ios_vcam_gui WIN32
         src/gui/gui_main.cpp
-        src/gui/ios_vcam_gui.rc
+        ${IOS_VCAM_GUI_MANIFEST}
         src/decoder/wasapi_renderer.cpp
     )
     target_include_directories(ios_vcam_gui PRIVATE
