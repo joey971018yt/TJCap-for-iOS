@@ -9,9 +9,9 @@ echo ==============================================================
 set "ROOT_DIR=%~dp0.."
 pushd "%ROOT_DIR%"
 
-cmake -S . -B build-msvc -G "Visual Studio 17 2022" -A x64
+cmake -S . -B build-msvc -A x64
 if errorlevel 1 (
-    echo [Error] CMake configuration failed. Ensure Visual Studio 2022 C++ workload is installed.
+    echo [Error] CMake configuration failed. Ensure Visual Studio C++ workload is installed.
     popd
     exit /b 1
 )
