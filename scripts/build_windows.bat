@@ -24,6 +24,7 @@ if errorlevel 1 (
 )
 
 if not exist "dist-win64\drivers" mkdir "dist-win64\drivers"
+copy /Y "build-msvc\Release\ios_vcam_gui.exe" "dist-win64\" >nul
 copy /Y "build-msvc\Release\ios_vcam_dshow.dll" "dist-win64\" >nul
 copy /Y "build-msvc\Release\ios_vcam_host.exe" "dist-win64\" >nul
 copy /Y "build-msvc\Release\ios_vcam_driver_setup.exe" "dist-win64\" >nul

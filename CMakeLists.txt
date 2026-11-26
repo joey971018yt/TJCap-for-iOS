@@ -125,4 +125,30 @@ if(WIN32)
     if(MINGW)
         target_link_options(ios_vcam_driver_setup PRIVATE -static -static-libgcc -static-libstdc++)
     endif()
+
+    # 4. One-Click Graphical Control Center (ios_vcam_gui.exe)
+    add_executable(ios_vcam_gui WIN32
+        src/gui/gui_main.cpp
+        src/gui/ios_vcam_gui.rc
+        src/decoder/wasapi_renderer.cpp
+    )
+    target_include_directories(ios_vcam_gui PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(ios_vcam_gui PRIVATE
+        ios_vcam_core
+        setupapi
+        comctl32
+        gdi32
+        user32
+        shell32
+        advapi32
+        ole32
+        oleaut32
+        uuid
+        winmm
+    )
+    if(MINGW)
+        target_link_options(ios_vcam_gui PRIVATE -static -static-libgcc -static-libstdc++)
+    endif()
 endif()

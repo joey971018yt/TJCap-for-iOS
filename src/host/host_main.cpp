@@ -52,6 +52,7 @@ struct HostOptions {
     bool list_audio_only = false;
     std::string preferred_udid;
     std::string audio_out_match;
+    std::string stop_event_name;
 };
 
 void PrintUsage() {
@@ -67,6 +68,7 @@ void PrintUsage() {
         << "  --no-audio-route       Disable automatic WASAPI virtual cable audio routing\n"
         << "  --list-audio           List active Windows audio playback endpoints and exit\n"
         << "  --sw-decode            Force CPU H.264 decoding instead of D3D11VA hardware acceleration\n"
+        << "  --stop-event <name>    Win32 named event for graceful GUI stop signaling\n"
         << "  --help                 Show this help message\n";
 }
 
@@ -91,6 +93,8 @@ bool ParseArgs(int argc, char** argv, HostOptions& opts) {
             opts.list_audio_only = true;
         } else if (arg == "--sw-decode") {
             opts.prefer_hw_decode = false;
+        } else if (arg == "--stop-event" && i + 1 < argc) {
+            opts.stop_event_name = argv[++i];
         }
     }
     return true;
@@ -145,6 +149,11 @@ int RunMockPipeline(SharedCaptureProducer& producer) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
+
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
@@ -161,6 +170,35 @@ int main(int argc, char** argv) {
 #endif
         return EXIT_SUCCESS;
     }
+
+#ifdef _WIN32
+    struct ScopedStopEventWatcher {
+        HANDLE stop_evt = nullptr;
+        HANDLE exit_evt = nullptr;
+        std::thread thr;
+        ~ScopedStopEventWatcher() {
+            if (exit_evt) SetEvent(exit_evt);
+            if (thr.joinable()) thr.join();
+            if (exit_evt) CloseHandle(exit_evt);
+            if (stop_evt) CloseHandle(stop_evt);
+        }
+    } stop_watcher;
+
+    if (!opts.stop_event_name.empty()) {
+        std::wstring wname(opts.stop_event_name.begin(), opts.stop_event_name.end());
+        stop_watcher.stop_evt = OpenEventW(SYNCHRONIZE, FALSE, wname.c_str());
+        if (stop_watcher.stop_evt) {
+            stop_watcher.exit_evt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            stop_watcher.thr = std::thread([hStop = stop_watcher.stop_evt, hExit = stop_watcher.exit_evt]() {
+                HANDLE handles[2] = {hStop, hExit};
+                DWORD rc = WaitForMultipleObjects(2, handles, FALSE, INFINITE);
+                if (rc == WAIT_OBJECT_0) {
+                    g_stop_flag.store(true, std::memory_order_release);
+                }
+            });
+        }
+    }
+#endif
 
     if (opts.list_audio_only) {
         auto endpoints = WasapiAudioRouter::EnumerateRenderEndpoints();
