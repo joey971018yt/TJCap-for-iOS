@@ -1,10 +1,14 @@
 #include "ios_vcam/app_resource.h"
 #include "ios_vcam/app_updater.h"
 #include "ios_vcam/dshow_guids.h"
+#include "ios_vcam/image_convert.h"
+#include "ios_vcam/screenshot_util.h"
+#include "ios_vcam/shared_ipc.h"
 #include "ios_vcam/usb_ios_transport.h"
 #include "ios_vcam/wasapi_renderer.h"
 
 #include <windows.h>
+#include <windowsx.h>
 #include <objbase.h>
 #include <commctrl.h>
 #include <dbt.h>
@@ -18,6 +22,8 @@
 #include <cwchar>
 #include <cwctype>
 #include <filesystem>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -34,10 +40,14 @@ constexpr int kIdBtnRepairDriver = 1003;
 constexpr int kIdBtnUninstall = 1004;
 constexpr int kIdBtnCopyObsGuide = 1005;
 constexpr int kIdBtnCheckUpdate = 1006;
+constexpr int kIdBtnPopoutMonitor = 1007;
+constexpr int kIdBtnScreenshot = 1008;
+constexpr int kIdBtnOpenScreenshots = 1009;
 constexpr int kIdComboResMode = 1010;
 constexpr int kIdComboStatusBar = 1011;
 constexpr int kIdComboAudioOut = 1012;
 constexpr int kIdChkHwDecode = 1013;
+constexpr int kIdChkInlinePreview = 1014;
 constexpr int kIdEditLog = 1020;
 
 constexpr UINT kWmAppendLog = WM_APP + 1;
@@ -45,6 +55,7 @@ constexpr UINT kWmHostExited = WM_APP + 2;
 constexpr UINT kWmUpdateCheckDone = WM_APP + 3;
 constexpr UINT_PTR kTimerRefreshId = 1;
 constexpr UINT_PTR kTimerStartupUpdateId = 2;
+constexpr UINT_PTR kTimerPreviewId = 3;
 
 enum class DshowRegState {
     NotRegistered,
@@ -743,8 +754,602 @@ private:
     std::thread dl_thread_;
 };
 
+void DrawPreviewCanvasGdi(
+    HDC dst_hdc,
+    const RECT& target_rc,
+    bool has_frame,
+    const std::vector<uint8_t>& bgra_topdown,
+    uint32_t fit_w,
+    uint32_t fit_h,
+    bool draw_border,
+    const std::wstring& badge_text,
+    bool badge_is_toast,
+    const std::wstring& idle_title,
+    const std::wstring& idle_subtitle,
+    HFONT font_bold,
+    HFONT font_normal) {
+    int w = target_rc.right - target_rc.left;
+    int h = target_rc.bottom - target_rc.top;
+    if (w <= 4 || h <= 4) return;
+
+    HDC mem_dc = CreateCompatibleDC(dst_hdc);
+    HBITMAP mem_bmp = CreateCompatibleBitmap(dst_hdc, w, h);
+    HGDIOBJ old_bmp = SelectObject(mem_dc, mem_bmp);
+
+    RECT local_rc{0, 0, w, h};
+    HBRUSH bg_brush = CreateSolidBrush(has_frame ? RGB(0, 0, 0) : RGB(18, 21, 28));
+    FillRect(mem_dc, &local_rc, bg_brush);
+    DeleteObject(bg_brush);
+
+    if (has_frame && fit_w > 0 && fit_h > 0 &&
+        bgra_topdown.size() >= static_cast<size_t>(fit_w) * fit_h * 4ULL) {
+        int off_x = (w - static_cast<int>(fit_w)) / 2;
+        int off_y = (h - static_cast<int>(fit_h)) / 2;
+
+        BITMAPINFO bmi{};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = static_cast<LONG>(fit_w);
+        bmi.bmiHeader.biHeight = -static_cast<LONG>(fit_h);  // Top-down BGRA32
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        StretchDIBits(
+            mem_dc,
+            off_x,
+            off_y,
+            static_cast<int>(fit_w),
+            static_cast<int>(fit_h),
+            0,
+            0,
+            static_cast<int>(fit_w),
+            static_cast<int>(fit_h),
+            bgra_topdown.data(),
+            &bmi,
+            DIB_RGB_COLORS,
+            SRCCOPY);
+    } else {
+        SetBkMode(mem_dc, TRANSPARENT);
+        HGDIOBJ old_font = SelectObject(mem_dc, font_bold);
+        SetTextColor(mem_dc, RGB(205, 214, 230));
+        RECT t1{12, h / 2 - 26, w - 12, h / 2};
+        DrawTextW(mem_dc, idle_title.c_str(), -1, &t1, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+        SelectObject(mem_dc, font_normal);
+        SetTextColor(mem_dc, RGB(128, 140, 162));
+        RECT t2{12, h / 2 + 2, w - 12, h / 2 + 26};
+        DrawTextW(mem_dc, idle_subtitle.c_str(), -1, &t2, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        SelectObject(mem_dc, old_font);
+    }
+
+    if (!badge_text.empty()) {
+        SetBkMode(mem_dc, TRANSPARENT);
+        HGDIOBJ old_f = SelectObject(mem_dc, font_normal);
+        RECT calc_rc{0, 0, w - 24, 32};
+        DrawTextW(mem_dc, badge_text.c_str(), -1, &calc_rc, DT_CALCRECT | DT_SINGLELINE);
+        int pill_w = std::min(w - 16, static_cast<int>(calc_rc.right - calc_rc.left) + 18);
+        int pill_h = static_cast<int>(calc_rc.bottom - calc_rc.top) + 8;
+        RECT pill_rc{8, 8, 8 + pill_w, 8 + pill_h};
+
+        HBRUSH pill_bg = CreateSolidBrush(badge_is_toast ? RGB(18, 68, 40) : RGB(20, 24, 32));
+        HBRUSH pill_bd = CreateSolidBrush(badge_is_toast ? RGB(54, 206, 118) : RGB(68, 142, 236));
+        FillRect(mem_dc, &pill_rc, pill_bg);
+        FrameRect(mem_dc, &pill_rc, pill_bd);
+        DeleteObject(pill_bg);
+        DeleteObject(pill_bd);
+
+        SetTextColor(mem_dc, badge_is_toast ? RGB(220, 255, 232) : RGB(236, 242, 252));
+        DrawTextW(mem_dc, badge_text.c_str(), -1, &pill_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        SelectObject(mem_dc, old_f);
+    }
+
+    if (draw_border) {
+        HBRUSH border_br = CreateSolidBrush(RGB(62, 72, 92));
+        FrameRect(mem_dc, &local_rc, border_br);
+        DeleteObject(border_br);
+    }
+
+    BitBlt(dst_hdc, target_rc.left, target_rc.top, w, h, mem_dc, 0, 0, SRCCOPY);
+    SelectObject(mem_dc, old_bmp);
+    DeleteObject(mem_bmp);
+    DeleteDC(mem_dc);
+}
+
+class LiveMonitorWindow {
+public:
+    LiveMonitorWindow(
+        HINSTANCE hinst,
+        HICON icon_big,
+        HICON icon_small,
+        HFONT font_bold,
+        HFONT font_normal,
+        std::function<void(HWND)> on_screenshot,
+        std::function<void()> on_open_folder)
+        : hinst_(hinst),
+          icon_big_(icon_big),
+          icon_small_(icon_small),
+          font_bold_(font_bold),
+          font_normal_(font_normal),
+          on_screenshot_(std::move(on_screenshot)),
+          on_open_folder_(std::move(on_open_folder)) {}
+
+    ~LiveMonitorWindow() {
+        CloseMonitor();
+        if (dark_bg_brush_) {
+            DeleteObject(dark_bg_brush_);
+            dark_bg_brush_ = nullptr;
+        }
+    }
+
+    HWND Hwnd() const { return hwnd_; }
+    bool IsOpen() const { return hwnd_ != nullptr && IsWindow(hwnd_); }
+
+    void ShowToast(const std::wstring& text, uint64_t duration_ms = 2200) {
+        toast_text_ = text;
+        toast_until_ms_ = GetTickCount64() + duration_ms;
+        if (IsOpen()) {
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+    }
+
+    void ShowOrActivate(UINT dpi) {
+        if (IsOpen()) {
+            if (IsIconic(hwnd_)) {
+                ShowWindow(hwnd_, SW_RESTORE);
+            }
+            SetForegroundWindow(hwnd_);
+            return;
+        }
+
+        const wchar_t* kCls = L"JCastLiveMonitorWndClass";
+        if (!dark_bg_brush_) {
+            dark_bg_brush_ = CreateSolidBrush(RGB(10, 12, 16));
+        }
+        static bool registered = false;
+        if (!registered) {
+            WNDCLASSEXW wc{};
+            wc.cbSize = sizeof(wc);
+            wc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
+            wc.lpfnWndProc = &LiveMonitorWindow::StaticWndProc;
+            wc.hInstance = hinst_;
+            wc.hIcon = icon_big_ ? icon_big_ : LoadIconW(nullptr, IDI_APPLICATION);
+            wc.hIconSm = icon_small_ ? icon_small_ : wc.hIcon;
+            wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+            wc.hbrBackground = dark_bg_brush_;
+            wc.lpszClassName = kCls;
+            RegisterClassExW(&wc);
+            registered = true;
+        }
+
+        uint32_t adv_w = 1920, adv_h = 1080;
+        if (!shm_.IsOpen()) shm_.Open(kDefaultShmName);
+        shm_.QueryAdvertisedDimensions(adv_w, adv_h);
+
+        RECT work{};
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+        int max_w = (work.right - work.left) * 82 / 100;
+        int max_h = (work.bottom - work.top) * 82 / 100;
+
+        int client_w = MulDiv(1120, static_cast<int>(dpi), 96);
+        int client_h = MulDiv(630, static_cast<int>(dpi), 96);
+        if (adv_h > adv_w && adv_h > 0) {
+            client_h = std::min(max_h, MulDiv(860, static_cast<int>(dpi), 96));
+            client_w = std::max(320, static_cast<int>(static_cast<int64_t>(client_h) * adv_w / adv_h));
+        } else if (adv_w > 0 && adv_h > 0) {
+            client_w = std::min(max_w, MulDiv(1160, static_cast<int>(dpi), 96));
+            client_h = std::max(280, static_cast<int>(static_cast<int64_t>(client_w) * adv_h / adv_w));
+        }
+
+        RECT adj{0, 0, client_w, client_h};
+        DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
+        AdjustWindowRectEx(&adj, style, FALSE, 0);
+        int win_w = std::min(max_w, static_cast<int>(adj.right - adj.left));
+        int win_h = std::min(max_h, static_cast<int>(adj.bottom - adj.top));
+        int pos_x = work.left + ((work.right - work.left) - win_w) / 2;
+        int pos_y = work.top + ((work.bottom - work.top) - win_h) / 2;
+
+        fullscreen_ = false;
+        topmost_ = false;
+        last_seq_ = 0;
+        force_refresh_ = true;
+
+        hwnd_ = CreateWindowExW(
+            0,
+            kCls,
+            L"JCast Live Monitor — 獨立外接螢幕視窗 [雙擊 / F11: 全螢幕 ｜ F12: 原畫質截圖 ｜ 右鍵: 選單]",
+            style,
+            pos_x,
+            pos_y,
+            win_w,
+            win_h,
+            nullptr,
+            nullptr,
+            hinst_,
+            this);
+        if (!hwnd_) return;
+
+        if (icon_big_) SendMessageW(hwnd_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(icon_big_));
+        if (icon_small_) SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(icon_small_));
+
+        SetTimer(hwnd_, kTimerId, 16, nullptr);
+        TickFrame(true);
+        ShowWindow(hwnd_, SW_SHOWNORMAL);
+        UpdateWindow(hwnd_);
+    }
+
+    void CloseMonitor() {
+        HWND w = hwnd_;
+        hwnd_ = nullptr;
+        if (w && IsWindow(w)) {
+            KillTimer(w, kTimerId);
+            DestroyWindow(w);
+        }
+        shm_.Close();
+        frame_bgra_.clear();
+        has_live_frame_ = false;
+    }
+
+private:
+    static constexpr UINT_PTR kTimerId = 1;
+    static constexpr int kCmdShot = 3001;
+    static constexpr int kCmdOpenDir = 3002;
+    static constexpr int kCmdFullscreen = 3003;
+    static constexpr int kCmdTopmost = 3004;
+    static constexpr int kCmdFitAspect = 3005;
+    static constexpr int kCmdClose = 3006;
+
+    void UpdateTitleBar() {
+        if (!hwnd_ || fullscreen_) return;
+        std::wstring t = L"JCast Live Monitor";
+        if (has_live_frame_ && src_w_ > 0 && src_h_ > 0) {
+            t += L" (" + std::to_wstring(src_w_) + L"×" + std::to_wstring(src_h_) + L")";
+        }
+        if (topmost_) t += L" [📌置頂]";
+        t += L" — 雙擊/F11: 全螢幕 ｜ F12: 原畫質截圖 ｜ 右鍵: 選單";
+        if (t != last_title_) {
+            last_title_ = t;
+            SetWindowTextW(hwnd_, t.c_str());
+        }
+    }
+
+    void ToggleFullscreen() {
+        if (!hwnd_) return;
+        if (!fullscreen_) {
+            wp_prev_.length = sizeof(wp_prev_);
+            GetWindowPlacement(hwnd_, &wp_prev_);
+            style_prev_ = static_cast<DWORD>(GetWindowLongPtrW(hwnd_, GWL_STYLE));
+
+            MONITORINFO mi{};
+            mi.cbSize = sizeof(mi);
+            if (GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi)) {
+                SetWindowLongPtrW(hwnd_, GWL_STYLE, style_prev_ & ~WS_OVERLAPPEDWINDOW);
+                SetWindowPos(
+                    hwnd_,
+                    topmost_ ? HWND_TOPMOST : HWND_TOP,
+                    mi.rcMonitor.left,
+                    mi.rcMonitor.top,
+                    mi.rcMonitor.right - mi.rcMonitor.left,
+                    mi.rcMonitor.bottom - mi.rcMonitor.top,
+                    SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+                fullscreen_ = true;
+                force_refresh_ = true;
+                ShowToast(L"⛶ 已進入無邊框全螢幕（按 Esc 或雙擊退出）", 1800);
+            }
+        } else {
+            SetWindowLongPtrW(hwnd_, GWL_STYLE, style_prev_);
+            SetWindowPlacement(hwnd_, &wp_prev_);
+            SetWindowPos(
+                hwnd_,
+                topmost_ ? HWND_TOPMOST : HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+            fullscreen_ = false;
+            force_refresh_ = true;
+            last_title_.clear();
+            UpdateTitleBar();
+        }
+    }
+
+    void ToggleTopmost() {
+        if (!hwnd_) return;
+        topmost_ = !topmost_;
+        SetWindowPos(
+            hwnd_,
+            topmost_ ? HWND_TOPMOST : HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        UpdateTitleBar();
+        ShowToast(topmost_ ? L"📌 已開啟視窗永遠置頂" : L"📌 已取消視窗置頂", 1600);
+    }
+
+    void FitWindowToSourceAspect() {
+        if (!hwnd_ || src_w_ == 0 || src_h_ == 0) return;
+        if (fullscreen_) ToggleFullscreen();
+
+        RECT rc{};
+        GetClientRect(hwnd_, &rc);
+        int cur_cw = std::max(240, static_cast<int>(rc.right - rc.left));
+        int target_cw = cur_cw;
+        int target_ch = static_cast<int>((static_cast<int64_t>(target_cw) * src_h_ + src_w_ / 2) / src_w_);
+
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        if (GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi)) {
+            int max_h = (mi.rcWork.bottom - mi.rcWork.top) * 86 / 100;
+            if (target_ch > max_h) {
+                target_ch = max_h;
+                target_cw = static_cast<int>((static_cast<int64_t>(target_ch) * src_w_ + src_h_ / 2) / src_h_);
+            }
+        }
+
+        DWORD style = static_cast<DWORD>(GetWindowLongPtrW(hwnd_, GWL_STYLE));
+        DWORD ex_style = static_cast<DWORD>(GetWindowLongPtrW(hwnd_, GWL_EXSTYLE));
+        RECT adj{0, 0, target_cw, target_ch};
+        AdjustWindowRectEx(&adj, style, FALSE, ex_style);
+        SetWindowPos(
+            hwnd_,
+            nullptr,
+            0,
+            0,
+            adj.right - adj.left,
+            adj.bottom - adj.top,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        force_refresh_ = true;
+    }
+
+    void ShowContextMenu(int screen_x, int screen_y) {
+        HMENU menu = CreatePopupMenu();
+        if (!menu) return;
+        AppendMenuW(menu, MF_STRING, kCmdShot, L"📸 一鍵原畫質無損截圖 (PNG + 複製剪貼簿)\tF12 / Ctrl+S");
+        AppendMenuW(menu, MF_STRING, kCmdOpenDir, L"📂 開啟截圖儲存資料夾");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING | (fullscreen_ ? MF_CHECKED : 0), kCmdFullscreen, L"⛶ 無邊框全螢幕模式\tF11 / 雙擊");
+        AppendMenuW(menu, MF_STRING | (topmost_ ? MF_CHECKED : 0), kCmdTopmost, L"📌 視窗永遠置頂 (Always on Top)\tCtrl+T");
+        AppendMenuW(
+            menu,
+            MF_STRING | ((has_live_frame_ && src_w_ > 0) ? 0 : MF_GRAYED),
+            kCmdFitAspect,
+            L"📐 依手機原生比例自動貼合視窗大小");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, kCmdClose, L"關閉獨立預覽視窗");
+
+        if (screen_x == -1 && screen_y == -1) {
+            POINT pt{40, 40};
+            ClientToScreen(hwnd_, &pt);
+            screen_x = pt.x;
+            screen_y = pt.y;
+        }
+        TrackPopupMenu(menu, TPM_RIGHTBUTTON, screen_x, screen_y, 0, hwnd_, nullptr);
+        DestroyMenu(menu);
+    }
+
+    void TickFrame(bool force) {
+        if (!hwnd_ || IsIconic(hwnd_)) return;
+
+        RECT rc{};
+        GetClientRect(hwnd_, &rc);
+        uint32_t cw = static_cast<uint32_t>(std::max<LONG>(2, rc.right - rc.left));
+        uint32_t ch = static_cast<uint32_t>(std::max<LONG>(2, rc.bottom - rc.top));
+
+        if (!shm_.IsOpen()) {
+            shm_.Open(kDefaultShmName);
+        }
+
+        bool updated = false;
+        uint32_t fit_w = 0, fit_h = 0, sw = 0, sh = 0;
+        bool alive = shm_.ReadLatestPreviewBGRA32(
+            cw,
+            ch,
+            force || force_refresh_,
+            last_seq_,
+            frame_bgra_,
+            fit_w,
+            fit_h,
+            sw,
+            sh,
+            &updated);
+        force_refresh_ = false;
+
+        bool toast_expired = (!toast_text_.empty() && GetTickCount64() >= toast_until_ms_);
+        if (toast_expired) {
+            toast_text_.clear();
+        }
+
+        if (alive) {
+            bool dim_changed = (!has_live_frame_ || sw != src_w_ || sh != src_h_);
+            has_live_frame_ = true;
+            fit_w_ = fit_w;
+            fit_h_ = fit_h;
+            src_w_ = sw;
+            src_h_ = sh;
+            if (dim_changed) {
+                UpdateTitleBar();
+            }
+            if (updated || dim_changed || toast_expired) {
+                InvalidateRect(hwnd_, nullptr, FALSE);
+            }
+        } else if (has_live_frame_ || toast_expired) {
+            has_live_frame_ = false;
+            last_seq_ = 0;
+            UpdateTitleBar();
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+    }
+
+    static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+        LiveMonitorWindow* self = nullptr;
+        if (msg == WM_NCCREATE) {
+            auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            self = static_cast<LiveMonitorWindow*>(cs->lpCreateParams);
+            self->hwnd_ = hwnd;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        } else {
+            self = reinterpret_cast<LiveMonitorWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        }
+        return self ? self->WndProc(msg, wParam, lParam) : DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
+    LRESULT WndProc(UINT msg, WPARAM wParam, LPARAM lParam) {
+        switch (msg) {
+            case WM_ERASEBKGND:
+                return 1;
+
+            case WM_SIZE:
+                force_refresh_ = true;
+                TickFrame(true);
+                InvalidateRect(hwnd_, nullptr, FALSE);
+                return 0;
+
+            case WM_TIMER:
+                if (wParam == kTimerId) {
+                    TickFrame(false);
+                }
+                return 0;
+
+            case WM_PAINT: {
+                PAINTSTRUCT ps{};
+                HDC hdc = BeginPaint(hwnd_, &ps);
+                RECT rc{};
+                GetClientRect(hwnd_, &rc);
+                std::wstring badge;
+                bool is_toast = false;
+                if (!toast_text_.empty() && GetTickCount64() < toast_until_ms_) {
+                    badge = toast_text_;
+                    is_toast = true;
+                }
+                DrawPreviewCanvasGdi(
+                    hdc,
+                    rc,
+                    has_live_frame_,
+                    frame_bgra_,
+                    fit_w_,
+                    fit_h_,
+                    false,
+                    badge,
+                    is_toast,
+                    L"📺 等待 iPhone / iPad 投影訊號中...",
+                    L"於主控制台點擊「🚀 智慧一鍵啟動」後即顯示高畫質畫面（雙擊或按 F11 切換全螢幕｜F12 原畫質截圖）",
+                    font_bold_,
+                    font_normal_);
+                EndPaint(hwnd_, &ps);
+                return 0;
+            }
+
+            case WM_LBUTTONDBLCLK:
+                ToggleFullscreen();
+                return 0;
+
+            case WM_CONTEXTMENU:
+                ShowContextMenu(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+                return 0;
+
+            case WM_SYSKEYDOWN:
+                if (wParam == VK_RETURN) {
+                    ToggleFullscreen();
+                    return 0;
+                }
+                break;
+
+            case WM_KEYDOWN: {
+                bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                if (wParam == VK_F11) {
+                    ToggleFullscreen();
+                    return 0;
+                }
+                if (wParam == VK_ESCAPE && fullscreen_) {
+                    ToggleFullscreen();
+                    return 0;
+                }
+                if (wParam == VK_F12 || (ctrl && wParam == 'S')) {
+                    if (on_screenshot_) on_screenshot_(hwnd_);
+                    return 0;
+                }
+                if (ctrl && wParam == 'T') {
+                    ToggleTopmost();
+                    return 0;
+                }
+                break;
+            }
+
+            case WM_COMMAND: {
+                int id = LOWORD(wParam);
+                if (id == kCmdShot) {
+                    if (on_screenshot_) on_screenshot_(hwnd_);
+                    return 0;
+                }
+                if (id == kCmdOpenDir) {
+                    if (on_open_folder_) on_open_folder_();
+                    return 0;
+                }
+                if (id == kCmdFullscreen) {
+                    ToggleFullscreen();
+                    return 0;
+                }
+                if (id == kCmdTopmost) {
+                    ToggleTopmost();
+                    return 0;
+                }
+                if (id == kCmdFitAspect) {
+                    FitWindowToSourceAspect();
+                    return 0;
+                }
+                if (id == kCmdClose) {
+                    PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+                    return 0;
+                }
+                break;
+            }
+
+            case WM_CLOSE:
+                CloseMonitor();
+                return 0;
+        }
+        return DefWindowProcW(hwnd_, msg, wParam, lParam);
+    }
+
+    HINSTANCE hinst_ = nullptr;
+    HWND hwnd_ = nullptr;
+    HICON icon_big_ = nullptr;
+    HICON icon_small_ = nullptr;
+    HFONT font_bold_ = nullptr;
+    HFONT font_normal_ = nullptr;
+    HBRUSH dark_bg_brush_ = nullptr;
+
+    std::function<void(HWND)> on_screenshot_;
+    std::function<void()> on_open_folder_;
+
+    SharedCaptureConsumer shm_;
+    uint64_t last_seq_ = 0;
+    bool force_refresh_ = true;
+    bool has_live_frame_ = false;
+    uint32_t fit_w_ = 0;
+    uint32_t fit_h_ = 0;
+    uint32_t src_w_ = 0;
+    uint32_t src_h_ = 0;
+    std::vector<uint8_t> frame_bgra_;
+
+    bool fullscreen_ = false;
+    bool topmost_ = false;
+    DWORD style_prev_ = 0;
+    WINDOWPLACEMENT wp_prev_{};
+    std::wstring last_title_;
+
+    std::wstring toast_text_;
+    uint64_t toast_until_ms_ = 0;
+};
+
 class ControlCenterWindow {
 public:
+    HWND Hwnd() const { return hwnd_; }
+    HWND LiveMonitorHwnd() const { return live_monitor_ ? live_monitor_->Hwnd() : nullptr; }
+    void TriggerScreenshotFromHotkey() { TakeFullResolutionScreenshot(hwnd_); }
+
     bool Create(HINSTANCE hInst, int nCmdShow) {
         hinst_ = hInst;
         base_dir_ = AppDir();
@@ -764,7 +1369,7 @@ public:
 
         WNDCLASSEXW wc{};
         wc.cbSize = sizeof(wc);
-        wc.style = CS_HREDRAW | CS_VREDRAW;
+        wc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
         wc.lpfnWndProc = &ControlCenterWindow::StaticWndProc;
         wc.hInstance = hInst;
         wc.hIcon = icon_big_ ? icon_big_ : LoadIconW(nullptr, IDI_APPLICATION);
@@ -774,8 +1379,8 @@ public:
         wc.lpszClassName = L"JCastForIosGuiWndClass";
         RegisterClassExW(&wc);
 
-        int win_w = Scale(780, dpi);
-        int win_h = Scale(680, dpi);
+        int win_w = Scale(820, dpi);
+        int win_h = Scale(700, dpi);
 
         RECT work{};
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
@@ -785,7 +1390,7 @@ public:
         hwnd_ = CreateWindowExW(
             0,
             wc.lpszClassName,
-            L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — 一鍵智慧擷取控制台 (USB 速率辨識 × 2K+ 原生自適應)",
+            L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — 一鍵智慧擷取控制台 (即時預覽 × 原畫質截圖 × 2K+ 自適應)",
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
             pos_x, pos_y, win_w, win_h,
             nullptr, nullptr, hInst, this);
@@ -1003,30 +1608,95 @@ private:
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnUninstall)), hinst_, nullptr);
         SendMessageW(btn_uninstall_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
 
-        // Group 3: Live Diagnostics, Mbps Bitrate & FPS Log
+        // Group 3: Split Lower Section — Left: Live Diagnostics Log | Right: Low-Load Live Preview & 1:1 Lossless Screenshot
+        int split_gap = Scale(14, dpi);
+        int left_w = (content_w - split_gap) * 53 / 100;
+        int right_x = margin + left_w + split_gap;
+        int right_w = (cw - margin) - right_x;
+
         int log_lbl_y = Scale(440, dpi);
         HWND lbl_log = CreateWindowExW(
             0, L"STATIC",
-            L"即時狀態、原生解析度比例與碼率監控（先啟動投影再開 OBS 可自動抓滿版 2K+ 比例）：",
+            L"即時狀態、解析度比例與碼率監控日誌：",
             WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
-            margin, log_lbl_y, content_w, Scale(22, dpi), hwnd_, nullptr, hinst_, nullptr);
+            margin, log_lbl_y, left_w, Scale(22, dpi), hwnd_, nullptr, hinst_, nullptr);
         SendMessageW(lbl_log, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
 
         int edit_y = log_lbl_y + Scale(24, dpi);
-        int edit_h = (rc.bottom - rc.top) - edit_y - Scale(14, dpi);
+        int bottom_margin = Scale(14, dpi);
+        int edit_h = (rc.bottom - rc.top) - edit_y - bottom_margin;
         edit_log_ = CreateWindowExW(
             WS_EX_CLIENTEDGE, L"EDIT", L"",
             WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
-            margin, edit_y, content_w, std::max(80, edit_h),
+            margin, edit_y, left_w, std::max(80, edit_h),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdEditLog)), hinst_, nullptr);
         SendMessageW(edit_log_, WM_SETFONT, reinterpret_cast<WPARAM>(font_mono_), TRUE);
         SendMessageW(edit_log_, EM_SETLIMITTEXT, 256 * 1024, 0);
 
+        chk_inline_preview_ = CreateWindowExW(
+            0, L"BUTTON", L"👁 內建即時預覽（雙擊放大｜F12 原畫質截圖）",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            right_x, log_lbl_y, right_w, Scale(22, dpi),
+            hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdChkInlinePreview)), hinst_, nullptr);
+        SendMessageW(chk_inline_preview_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+        SendMessageW(chk_inline_preview_, BM_SETCHECK, BST_CHECKED, 0);
+        inline_preview_enabled_ = true;
+
+        int preview_btn_h = Scale(30, dpi);
+        int preview_btn_y = (rc.bottom - rc.top) - bottom_margin - preview_btn_h;
+        preview_rect_ = {
+            right_x,
+            edit_y,
+            cw - margin,
+            std::max(edit_y + Scale(60, dpi), preview_btn_y - Scale(6, dpi)),
+        };
+
+        int p_gap = Scale(6, dpi);
+        int p_avail = right_w - p_gap * 2;
+        int w_pop = p_avail * 38 / 100;
+        int w_shot = p_avail * 40 / 100;
+        int w_dir = p_avail - w_pop - w_shot;
+        int px = right_x;
+
+        btn_popout_monitor_ = CreateWindowExW(
+            0, L"BUTTON", L"🖥 獨立大視窗",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            px, preview_btn_y, w_pop, preview_btn_h,
+            hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnPopoutMonitor)), hinst_, nullptr);
+        SendMessageW(btn_popout_monitor_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+        px += w_pop + p_gap;
+
+        btn_screenshot_ = CreateWindowExW(
+            0, L"BUTTON", L"📸 原畫質截圖",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            px, preview_btn_y, w_shot, preview_btn_h,
+            hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnScreenshot)), hinst_, nullptr);
+        SendMessageW(btn_screenshot_, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
+        px += w_shot + p_gap;
+
+        btn_open_shots_ = CreateWindowExW(
+            0, L"BUTTON", L"📂 圖庫",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            px, preview_btn_y, w_dir, preview_btn_h,
+            hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnOpenScreenshots)), hinst_, nullptr);
+        SendMessageW(btn_open_shots_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+
+        live_monitor_ = std::make_unique<LiveMonitorWindow>(
+            hinst_,
+            icon_big_,
+            icon_small_,
+            font_bold_,
+            font_normal_,
+            [this](HWND owner) { TakeFullResolutionScreenshot(owner); },
+            [this]() { OpenScreenshotsFolder(); });
+
         AppendLogLine(
-            L"[歡迎] 歡迎使用 JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L"！支援 GitHub Releases 自動更新、USB 速率辨識與 2K+ 原生自適應比例！");
+            L"[歡迎] 歡迎使用 JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR
+            L"！新增「🎬 內建/獨立全螢幕即時預覽」與「📸 一鍵 2K+ 原畫質無損截圖 (F12)」！");
         RefreshHealthAndUi(true);
         SetTimer(hwnd_, kTimerRefreshId, 2000, nullptr);
         SetTimer(hwnd_, kTimerStartupUpdateId, 1500, nullptr);
+        SetTimer(hwnd_, kTimerPreviewId, 33, nullptr);
     }
 
     void PopulateResolutionOptionsForSpeed(UsbLinkSpeed speed, bool is_initial) {
@@ -1649,12 +2319,14 @@ private:
         host_running_.store(false, std::memory_order_release);
         running_mock_ = false;
         RefreshHealthAndUi(true);
+        TickInlinePreview(true);
     }
 
     void ShowAndCopyObsGuide() {
         const wchar_t* guide =
             L"【JCast for iOS — OBS Studio 滿版自適應比例設定步驟】\r\n\r\n"
             L"1. 先在本控制台插上手機（自動辨識 USB 速率並開放最大解析度選項），選好解析度後點擊「智慧一鍵啟動」。\r\n"
+            L"   💡 若只想把電腦當 iPhone/iPad 外接大螢幕，直接點右下角「🖥 獨立大視窗」（按 F11 全螢幕、F12 原畫質截圖），完全不必開 OBS！\r\n"
             L"2. 開啟 OBS Studio，新增「視訊擷取裝置」➔ 選擇：JCast for iOS (Video)\r\n"
             L"3.「解析度/FPS 類型」保持「裝置預設值」：OBS 會自動抓到您鎖定的 iPhone/iPad 原生比例（滿版零黑邊）！\r\n"
             L"   （若您先開了 OBS 才連手機，只要在 OBS 來源點一下「停用 ➔ 啟用」就會自動刷新成原生比例）\r\n"
@@ -1803,6 +2475,158 @@ private:
         }
     }
 
+    void ShowInlineToast(const std::wstring& text, uint64_t duration_ms = 2400) {
+        inline_toast_text_ = text;
+        inline_toast_until_ms_ = GetTickCount64() + duration_ms;
+        if (hwnd_) {
+            InvalidateRect(hwnd_, &preview_rect_, FALSE);
+        }
+    }
+
+    void TickInlinePreview(bool force) {
+        if (!hwnd_ || IsIconic(hwnd_)) return;
+
+        bool toast_expired = (!inline_toast_text_.empty() && GetTickCount64() >= inline_toast_until_ms_);
+        if (toast_expired) {
+            inline_toast_text_.clear();
+        }
+
+        if (!inline_preview_enabled_) {
+            if (inline_has_frame_ || toast_expired) {
+                inline_has_frame_ = false;
+                inline_last_seq_ = 0;
+                inline_bgra_.clear();
+                InvalidateRect(hwnd_, &preview_rect_, FALSE);
+            }
+            return;
+        }
+
+        uint32_t pw = static_cast<uint32_t>(std::max<LONG>(4, (preview_rect_.right - preview_rect_.left) - 2));
+        uint32_t ph = static_cast<uint32_t>(std::max<LONG>(4, (preview_rect_.bottom - preview_rect_.top) - 2));
+
+        if (!preview_shm_.IsOpen()) {
+            preview_shm_.Open(kDefaultShmName);
+        }
+
+        bool updated = false;
+        uint32_t fit_w = 0, fit_h = 0, sw = 0, sh = 0, kbps = 0;
+        bool alive = preview_shm_.ReadLatestPreviewBGRA32(
+            pw,
+            ph,
+            force || inline_force_refresh_,
+            inline_last_seq_,
+            inline_bgra_,
+            fit_w,
+            fit_h,
+            sw,
+            sh,
+            &updated,
+            &kbps);
+        inline_force_refresh_ = false;
+
+        if (alive) {
+            bool state_changed = (!inline_has_frame_ || sw != inline_src_w_ || sh != inline_src_h_);
+            inline_has_frame_ = true;
+            inline_fit_w_ = fit_w;
+            inline_fit_h_ = fit_h;
+            inline_src_w_ = sw;
+            inline_src_h_ = sh;
+            inline_bitrate_kbps_ = kbps;
+            if (updated || state_changed || toast_expired) {
+                InvalidateRect(hwnd_, &preview_rect_, FALSE);
+            }
+        } else if (inline_has_frame_ || toast_expired) {
+            inline_has_frame_ = false;
+            inline_last_seq_ = 0;
+            inline_src_w_ = 0;
+            inline_src_h_ = 0;
+            inline_bitrate_kbps_ = 0;
+            InvalidateRect(hwnd_, &preview_rect_, FALSE);
+        }
+    }
+
+    void PaintInlinePreview(HDC hdc) {
+        std::wstring badge;
+        bool is_toast = false;
+        if (!inline_toast_text_.empty() && GetTickCount64() < inline_toast_until_ms_) {
+            badge = inline_toast_text_;
+            is_toast = true;
+        } else if (inline_preview_enabled_ && inline_has_frame_ && inline_src_w_ > 0 && inline_src_h_ > 0) {
+            badge = L"● LIVE " + std::to_wstring(inline_src_w_) + L"×" + std::to_wstring(inline_src_h_);
+        }
+
+        std::wstring idle_title = inline_preview_enabled_
+                                      ? L"🎬 低負載即時預覽待命中"
+                                      : L"⏸ 已暫停內建預覽（0% 額外負載）";
+        std::wstring idle_sub = inline_preview_enabled_
+                                    ? L"啟動投影後自動顯示（雙擊畫面開啟大視窗）"
+                                    : L"OBS 虛擬擷取卡與「📸 原畫質截圖」仍正常運作";
+
+        DrawPreviewCanvasGdi(
+            hdc,
+            preview_rect_,
+            inline_preview_enabled_ && inline_has_frame_,
+            inline_bgra_,
+            inline_fit_w_,
+            inline_fit_h_,
+            true,
+            badge,
+            is_toast,
+            idle_title,
+            idle_sub,
+            font_bold_,
+            font_normal_);
+    }
+
+    void TakeFullResolutionScreenshot(HWND source_hwnd) {
+        if (!preview_shm_.IsOpen()) {
+            preview_shm_.Open(kDefaultShmName);
+        }
+
+        std::vector<uint8_t> full_bgra;
+        uint32_t w = 0, h = 0;
+        if (!preview_shm_.CaptureLatestFullResBGRA32(full_bgra, w, h)) {
+            AppendLogLine(L"[截圖提示] 目前尚無擷取畫面，請先點擊「🚀 智慧一鍵啟動」或「🧪 免手機自測」後再截圖。");
+            if (live_monitor_ && source_hwnd == live_monitor_->Hwnd()) {
+                live_monitor_->ShowToast(L"⚠️ 尚無投影訊號可截圖，請先啟動投影", 2200);
+            } else {
+                ShowInlineToast(L"⚠️ 尚無投影訊號可截圖", 2200);
+            }
+            return;
+        }
+
+        std::filesystem::path dir = GetDefaultScreenshotDirectory(base_dir_);
+        std::filesystem::path png_path = BuildTimestampedScreenshotPath(dir, w, h);
+
+        std::string err;
+        bool png_ok = SaveTopDownBGRA32AsPng(full_bgra.data(), w, h, png_path, &err);
+        HWND clip_owner = (source_hwnd && IsWindow(source_hwnd)) ? source_hwnd : hwnd_;
+        bool clip_ok = CopyTopDownBGRA32ToClipboard(clip_owner, full_bgra.data(), w, h);
+
+        if (png_ok) {
+            std::wstring toast = L"📸 已截圖 " + std::to_wstring(w) + L"×" + std::to_wstring(h) +
+                                 (clip_ok ? L" (PNG + 已複製剪貼簿)" : L" (已存 PNG)");
+            ShowInlineToast(toast, 2500);
+            if (live_monitor_ && live_monitor_->IsOpen()) {
+                live_monitor_->ShowToast(toast, 2500);
+            }
+            AppendLogLine(
+                L"[原畫質截圖] 📸 已儲存 1:1 無損 PNG (" + std::to_wstring(w) + L"×" + std::to_wstring(h) + L")" +
+                (clip_ok ? L" 並複製至剪貼簿 (可直接 Ctrl+V 貼上)" : L"") + L"：" + png_path.wstring());
+        } else {
+            AppendLogLine(L"[截圖失敗] 無法寫入 PNG 檔案：" + Utf8ToWide(err));
+            ShowInlineToast(L"❌ 截圖儲存失敗", 2500);
+            if (live_monitor_ && live_monitor_->IsOpen()) {
+                live_monitor_->ShowToast(L"❌ 截圖儲存失敗", 2500);
+            }
+        }
+    }
+
+    void OpenScreenshotsFolder() {
+        std::filesystem::path dir = GetDefaultScreenshotDirectory(base_dir_);
+        ShellExecuteW(hwnd_, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+
     static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         ControlCenterWindow* self = nullptr;
         if (msg == WM_NCCREATE) {
@@ -1826,8 +2650,29 @@ private:
                 PAINTSTRUCT ps{};
                 HDC hdc = BeginPaint(hwnd_, &ps);
                 PaintStatusBanner(hdc);
+                PaintInlinePreview(hdc);
                 EndPaint(hwnd_, &ps);
                 return 0;
+            }
+
+            case WM_SETCURSOR: {
+                if (reinterpret_cast<HWND>(wParam) == hwnd_ && LOWORD(lParam) == HTCLIENT) {
+                    POINT pt{};
+                    if (GetCursorPos(&pt) && ScreenToClient(hwnd_, &pt) && PtInRect(&preview_rect_, pt)) {
+                        SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                        return TRUE;
+                    }
+                }
+                break;
+            }
+
+            case WM_LBUTTONDBLCLK: {
+                POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                if (PtInRect(&preview_rect_, pt) && live_monitor_) {
+                    live_monitor_->ShowOrActivate(GetSystemDpiSafe(hwnd_));
+                    return 0;
+                }
+                break;
             }
 
             case WM_CTLCOLORSTATIC: {
@@ -1848,6 +2693,8 @@ private:
                     if (!host_running_.load(std::memory_order_acquire)) {
                         StartAsyncUpdateCheck(false);
                     }
+                } else if (wParam == kTimerPreviewId) {
+                    TickInlinePreview(false);
                 }
                 return 0;
 
@@ -1865,6 +2712,28 @@ private:
                     return 0;
                 }
                 if (code == BN_CLICKED) {
+                    if (id == kIdChkInlinePreview) {
+                        inline_preview_enabled_ =
+                            (SendMessageW(chk_inline_preview_, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                        inline_force_refresh_ = true;
+                        TickInlinePreview(true);
+                        InvalidateRect(hwnd_, &preview_rect_, FALSE);
+                        return 0;
+                    }
+                    if (id == kIdBtnPopoutMonitor) {
+                        if (live_monitor_) {
+                            live_monitor_->ShowOrActivate(GetSystemDpiSafe(hwnd_));
+                        }
+                        return 0;
+                    }
+                    if (id == kIdBtnScreenshot) {
+                        TakeFullResolutionScreenshot(hwnd_);
+                        return 0;
+                    }
+                    if (id == kIdBtnOpenScreenshots) {
+                        OpenScreenshotsFolder();
+                        return 0;
+                    }
                     if (id == kIdBtnSmartStart) {
                         if (host_running_.load(std::memory_order_acquire)) {
                             AppendLogLine(L"[操作] 正在停止投影擷取並恢復標準 USB 模式...");
@@ -1949,6 +2818,11 @@ private:
                 shutting_down_.store(true, std::memory_order_release);
                 KillTimer(hwnd_, kTimerRefreshId);
                 KillTimer(hwnd_, kTimerStartupUpdateId);
+                KillTimer(hwnd_, kTimerPreviewId);
+                if (live_monitor_) {
+                    live_monitor_->CloseMonitor();
+                }
+                preview_shm_.Close();
                 if (host_running_.load(std::memory_order_acquire)) {
                     StopHostProcess();
                 }
@@ -1986,16 +2860,21 @@ private:
     HICON icon_banner_ = nullptr;
 
     RECT banner_rect_{};
+    RECT preview_rect_{};
     HWND combo_res_mode_ = nullptr;
     HWND combo_status_bar_ = nullptr;
     HWND combo_audio_ = nullptr;
     HWND chk_hw_decode_ = nullptr;
+    HWND chk_inline_preview_ = nullptr;
     HWND btn_smart_start_ = nullptr;
     HWND btn_mock_ = nullptr;
     HWND btn_repair_ = nullptr;
     HWND btn_obs_guide_ = nullptr;
     HWND btn_update_ = nullptr;
     HWND btn_uninstall_ = nullptr;
+    HWND btn_popout_monitor_ = nullptr;
+    HWND btn_screenshot_ = nullptr;
+    HWND btn_open_shots_ = nullptr;
     HWND edit_log_ = nullptr;
 
     HFONT font_normal_ = nullptr;
@@ -2004,6 +2883,21 @@ private:
     HFONT font_mono_ = nullptr;
 
     std::vector<std::wstring> audio_endpoint_matches_;
+
+    SharedCaptureConsumer preview_shm_;
+    bool inline_preview_enabled_ = true;
+    bool inline_force_refresh_ = true;
+    bool inline_has_frame_ = false;
+    uint64_t inline_last_seq_ = 0;
+    uint32_t inline_fit_w_ = 0;
+    uint32_t inline_fit_h_ = 0;
+    uint32_t inline_src_w_ = 0;
+    uint32_t inline_src_h_ = 0;
+    uint32_t inline_bitrate_kbps_ = 0;
+    std::vector<uint8_t> inline_bgra_;
+    std::wstring inline_toast_text_;
+    uint64_t inline_toast_until_ms_ = 0;
+    std::unique_ptr<LiveMonitorWindow> live_monitor_;
 
     std::mutex proc_mtx_;
     HANDLE host_process_ = nullptr;
@@ -2048,7 +2942,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        if (!IsDialogMessageW(GetActiveWindow(), &msg)) {
+        HWND active_wnd = GetActiveWindow();
+        if (active_wnd == app.Hwnd() && IsWindowEnabled(app.Hwnd()) &&
+            msg.message == WM_KEYDOWN && msg.wParam == VK_F12) {
+            app.TriggerScreenshotFromHotkey();
+            continue;
+        }
+        if (active_wnd != nullptr && active_wnd == app.LiveMonitorHwnd()) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+            continue;
+        }
+        if (!IsDialogMessageW(active_wnd, &msg)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }

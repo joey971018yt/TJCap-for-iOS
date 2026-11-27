@@ -1,4 +1,5 @@
 #include "ios_vcam/shared_ipc.h"
+#include "ios_vcam/image_convert.h"
 
 #include <algorithm>
 #include <chrono>
@@ -368,6 +369,98 @@ bool SharedCaptureConsumer::ReadLatestNV12Frame(
     if (out_src_h) {
         *out_src_h = hdr.source_height;
     }
+    return true;
+}
+
+bool SharedCaptureConsumer::ReadLatestPreviewBGRA32(
+    uint32_t box_w,
+    uint32_t box_h,
+    bool force_refresh,
+    uint64_t& io_last_seq,
+    std::vector<uint8_t>& out_bgra_topdown,
+    uint32_t& out_fit_w,
+    uint32_t& out_fit_h,
+    uint32_t& out_src_w,
+    uint32_t& out_src_h,
+    bool* out_pixels_updated,
+    uint32_t* out_bitrate_kbps) {
+    if (out_pixels_updated) *out_pixels_updated = false;
+    if (!layout_ || box_w < 2 || box_h < 2 || !IsProducerAlive()) {
+        return false;
+    }
+    uint64_t total = layout_->total_video_frames.load(std::memory_order_acquire);
+    if (total == 0) {
+        return false;
+    }
+    uint32_t slot = layout_->latest_video_slot.load(std::memory_order_acquire);
+    if (slot >= kVideoSlotCount) {
+        return false;
+    }
+
+    const VideoSlotHeader hdr = layout_->slot_headers[slot];
+    uint32_t fw = 0, fh = 0;
+    AlignAdaptiveDimensions(hdr.frame_width, hdr.frame_height, fw, fh);
+    size_t nv12_bytes = static_cast<size_t>(fw) * fh * 3ULL / 2ULL;
+    if (nv12_bytes > kMaxNv12FrameBytes) {
+        return false;
+    }
+
+    LetterboxRect fit = ComputeAspectFitRect(fw, fh, box_w, box_h);
+    out_fit_w = fit.width;
+    out_fit_h = fit.height;
+    out_src_w = fw;
+    out_src_h = fh;
+    if (out_bitrate_kbps) {
+        *out_bitrate_kbps = hdr.bitrate_kbps;
+    }
+
+    const size_t target_bgra_bytes = static_cast<size_t>(fit.width) * fit.height * 4ULL;
+    if (!force_refresh && hdr.frame_seq == io_last_seq && out_bgra_topdown.size() == target_bgra_bytes) {
+        return true;
+    }
+
+    out_bgra_topdown.resize(target_bgra_bytes);
+    SampleNV12ToBGRA32Bilinear(
+        layout_->video_slots[slot],
+        fw,
+        fh,
+        out_bgra_topdown.data(),
+        fit.width,
+        fit.height);
+
+    io_last_seq = hdr.frame_seq;
+    if (out_pixels_updated) *out_pixels_updated = true;
+    return true;
+}
+
+bool SharedCaptureConsumer::CaptureLatestFullResBGRA32(
+    std::vector<uint8_t>& out_bgra_topdown,
+    uint32_t& out_width,
+    uint32_t& out_height) {
+    if (!layout_ || !IsProducerAlive()) {
+        return false;
+    }
+    uint64_t total = layout_->total_video_frames.load(std::memory_order_acquire);
+    if (total == 0) {
+        return false;
+    }
+    uint32_t slot = layout_->latest_video_slot.load(std::memory_order_acquire);
+    if (slot >= kVideoSlotCount) {
+        return false;
+    }
+
+    const VideoSlotHeader hdr = layout_->slot_headers[slot];
+    uint32_t fw = 0, fh = 0;
+    AlignAdaptiveDimensions(hdr.frame_width, hdr.frame_height, fw, fh);
+    size_t nv12_bytes = static_cast<size_t>(fw) * fh * 3ULL / 2ULL;
+    if (nv12_bytes > kMaxNv12FrameBytes) {
+        return false;
+    }
+
+    out_bgra_topdown.resize(static_cast<size_t>(fw) * fh * 4ULL);
+    ConvertNV12ToBGRA32TopDown(layout_->video_slots[slot], fw, fh, out_bgra_topdown.data());
+    out_width = fw;
+    out_height = fh;
     return true;
 }
 

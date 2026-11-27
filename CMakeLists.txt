@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ios_usb_vcam VERSION 1.5.1 LANGUAGES CXX)
+project(ios_usb_vcam VERSION 1.6.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,13 +19,14 @@ else()
     endif()
 endif()
 
-# Core cross-platform protocol, image scaling, shared-memory IPC, and GitHub Releases updater library
+# Core cross-platform protocol, image scaling, shared-memory IPC, updater, and screenshot library
 add_library(ios_vcam_core STATIC
     src/protocol/coremedia_codec.cpp
     src/protocol/qt_session.cpp
     src/common/image_convert.cpp
     src/common/shared_ipc.cpp
     src/common/app_updater.cpp
+    src/common/screenshot_util.cpp
 )
 target_include_directories(ios_vcam_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -40,7 +41,7 @@ add_executable(ios_vcam_tests
 )
 target_link_libraries(ios_vcam_tests PRIVATE ios_vcam_core)
 if(WIN32)
-    target_link_libraries(ios_vcam_tests PRIVATE winhttp bcrypt shell32)
+    target_link_libraries(ios_vcam_tests PRIVATE winhttp bcrypt shell32 ole32 user32 windowscodecs)
 endif()
 if(MINGW)
     target_link_options(ios_vcam_tests PRIVATE -static -static-libgcc -static-libstdc++)
@@ -163,6 +164,7 @@ if(WIN32)
         winmm
         winhttp
         bcrypt
+        windowscodecs
     )
     if(MINGW)
         target_compile_definitions(ios_vcam_gui PRIVATE IOS_VCAM_EMBED_RC_MANIFEST=1)

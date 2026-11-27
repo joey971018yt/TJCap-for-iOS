@@ -47,7 +47,7 @@ jobs:
             Copy-Item "dist-win64\drivers\*" "release-msvc-win64\drivers\"
           }
 
-          # Create clean Portable App ZIP (JCast-for-iOS-Portable-v1.5.1.zip)
+          # Create clean Portable App ZIP (JCast-for-iOS-Portable-v1.6.0.zip)
           New-Item -ItemType Directory -Force -Path "build-installer\JCast-for-iOS" | Out-Null
           Copy-Item "release-msvc-win64\JCast for iOS.exe" "build-installer\JCast-for-iOS\"
           Copy-Item "release-msvc-win64\ios_vcam_gui.exe" "build-installer\JCast-for-iOS\"
@@ -59,7 +59,7 @@ jobs:
           Copy-Item "release-msvc-win64\CHANGELOG.md" "build-installer\JCast-for-iOS\"
           Copy-Item "release-msvc-win64\THIRD_PARTY_NOTICES.md" "build-installer\JCast-for-iOS\"
           Copy-Item -Recurse "release-msvc-win64\drivers" "build-installer\JCast-for-iOS\drivers"
-          Compress-Archive -Path "build-installer\JCast-for-iOS" -DestinationPath "build-installer\JCast-for-iOS-Portable-v1.5.1.zip" -Force
+          Compress-Archive -Path "build-installer\JCast-for-iOS" -DestinationPath "build-installer\JCast-for-iOS-Portable-v1.6.0.zip" -Force
 
       - name: Build Windows App Setup.exe via Inno Setup 6
         shell: pwsh
@@ -80,45 +80,47 @@ jobs:
           name: jcast-for-ios-app-packages
           path: |
             release-msvc-win64/
-            build-installer/JCast-for-iOS-Setup-v1.5.1.exe
-            build-installer/JCast-for-iOS-Portable-v1.5.1.zip
+            build-installer/JCast-for-iOS-Setup-v1.6.0.exe
+            build-installer/JCast-for-iOS-Portable-v1.6.0.zip
 
-      - name: Publish JCast for iOS Setup.exe & Portable.zip to GitHub Release v1.5.1
+      - name: Publish JCast for iOS Setup.exe & Portable.zip to GitHub Release v1.6.0
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           $notes = @"
-          ## 🛡️ JCast for iOS v1.5.1 — Windows 系統安全性強化更新
+          ## 🎬 JCast for iOS v1.6.0 — 內建低負載即時預覽 × 獨立全螢幕視窗 × 📸 一鍵 2K+ 原畫質無損截圖
 
-          > 💡 **如果您已安裝 `v1.5.0`，現在直接開啟 App 點擊「⬆️ 升級 v1.5.1」即可體驗一鍵自動升級！**
+          > 💡 **如果您已安裝 `v1.5.0` 或 `v1.5.1`，直接開啟 App 點擊「⬆️ 升級 v1.6.0」即可一鍵自動升級！**
 
-          ### 🔒 v1.5.1 安全性強化重點
-          - **防範 DLL 搜尋順序劫持 (`CWE-427`)**：全模組啟動時強制呼叫 `SetDllDirectoryW("")` 與 `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)`，並改用 `LoadLibraryExW` 鎖定應用程式絕對路徑載入 `libusb-1.0.dll` 與 `ios_vcam_dshow.dll`。
-          - **防範外部執行檔與路徑穿越風險 (`CWE-426` / `CWE-22`)**：更新器鎖定 `System32` 絕對路徑呼叫 PowerShell、強制驗證 `github.com` / `*.githubusercontent.com` 官方 HTTPS 網域白名單與檔名純化。
-          - **啟用完整 Windows 硬體級記憶體防護**：全執行檔開啟 64-bit 高熵位址隨機化 (`/HIGHENTROPYVA` ASLR)、資料執行防止 (`/NXCOMPAT` DEP)、控制流防護 (`/GUARD:CF` CFG) 與硬體堆疊保護 (`/CETCOMPAT` Shadow Stack)。
-          - 新增 `THIRD_PARTY_NOTICES.md` 明確標示第三方開源驅動與元件授權。
+          ### ✨ v1.6.0 全新功能亮點
+          - **👁 控制台內建「極低負載即時預覽視窗」**：
+            - 直接從三重緩衝共享記憶體（`IosUsbVcamSharedMemV2`）零拷貝取樣縮放，無新畫面時自動跳過運算（`0%` 閒置負載），並提供一鍵勾選開關，**完全不搶佔 OBS Studio 直播效能**。
+          - **🖥 獨立大視窗／無邊框全螢幕外接螢幕模式 (`JCast Live Monitor`)**：
+            - 點擊 **`🖥 獨立大視窗`**（或雙擊預覽畫面）即可彈出獨立高畫質視窗，支援自由縮放、依手機直橫屏原生比例自動貼合、`F11` / 雙擊無邊框全螢幕與 `Ctrl+T` 視窗永遠置頂——**不必開 OBS 也能把電腦當 iPhone / iPad 有線零延遲大螢幕使用**！
+          - **📸 一鍵 1:1 原畫質無損截圖 (`F12` 快捷鍵)**：
+            - 無論預覽視窗縮得多小，點擊 **`📸 原畫質截圖`** 或按 **`F12`** 皆直接擷取 **1:1 原始 2K+ 滿版解析度**（如 `2868×1320`），透過 Windows WIC 儲存為**無損 PNG**（預設存於 `圖片\JCast Screenshots`，點 `📂 圖庫` 即開），**並同步寫入 Windows 剪貼簿 (`CF_DIB`)**，截完立刻可在 Discord / LINE / Photoshop 按 `Ctrl+V` 貼上！
 
           ---
 
           ### 📦 下載檔案說明
-          1. **推薦下載：`JCast-for-iOS-Setup-v1.5.1.exe`（正式安裝版 App）**
-          2. **免安裝選擇：`JCast-for-iOS-Portable-v1.5.1.zip`（綠色便攜版 App）**
+          1. **推薦下載：`JCast-for-iOS-Setup-v1.6.0.exe`（正式安裝版 App）**
+          2. **免安裝選擇：`JCast-for-iOS-Portable-v1.6.0.zip`（綠色便攜版 App）**
           "@
-          gh release view v1.5.1 >$null 2>&1
+          gh release view v1.6.0 >$null 2>&1
           if ($LASTEXITCODE -eq 0) {
-            gh release edit v1.5.1 `
-              --title "JCast for iOS v1.5.1 (Windows 系統安全性強化 + 自動更新)" `
+            gh release edit v1.6.0 `
+              --title "JCast for iOS v1.6.0 (內建即時預覽 + 獨立全螢幕外接螢幕 + 一鍵 2K+ 無損截圖)" `
               --notes $notes
-            gh release upload v1.5.1 `
-              "build-installer\JCast-for-iOS-Setup-v1.5.1.exe" `
-              "build-installer\JCast-for-iOS-Portable-v1.5.1.zip" `
+            gh release upload v1.6.0 `
+              "build-installer\JCast-for-iOS-Setup-v1.6.0.exe" `
+              "build-installer\JCast-for-iOS-Portable-v1.6.0.zip" `
               --clobber
           } else {
-            gh release create v1.5.1 `
-              "build-installer\JCast-for-iOS-Setup-v1.5.1.exe" `
-              "build-installer\JCast-for-iOS-Portable-v1.5.1.zip" `
-              --title "JCast for iOS v1.5.1 (Windows 系統安全性強化 + 自動更新)" `
+            gh release create v1.6.0 `
+              "build-installer\JCast-for-iOS-Setup-v1.6.0.exe" `
+              "build-installer\JCast-for-iOS-Portable-v1.6.0.zip" `
+              --title "JCast for iOS v1.6.0 (內建即時預覽 + 獨立全螢幕外接螢幕 + 一鍵 2K+ 無損截圖)" `
               --notes $notes
           }

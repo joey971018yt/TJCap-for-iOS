@@ -2,6 +2,7 @@
 #include "ios_vcam/coremedia_codec.h"
 #include "ios_vcam/image_convert.h"
 #include "ios_vcam/qt_session.h"
+#include "ios_vcam/screenshot_util.h"
 #include "ios_vcam/shared_ipc.h"
 #include "ios_vcam/usb_ios_transport.h"
 
@@ -9,6 +10,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -381,10 +384,125 @@ bool TestGitHubReleasesJsonAndSemVerUpdater() {
     return true;
 }
 
+bool TestPreviewDownscaleAndFullResScreenshotPipeline() {
+    // 1. Verify ComputeAspectFitRect for 19.5:9 landscape, 9:19.5 portrait, and 4:3 iPad Pro
+    LetterboxRect r_land = ComputeAspectFitRect(2868, 1320, 355, 147);
+    ASSERT_TRUE(r_land.height == 147 && r_land.width >= 318 && r_land.width <= 320 && r_land.y == 0,
+                "2868x1320 landscape inside 355x147 inline preview should fit full height (~319x147)");
+
+    LetterboxRect r_port = ComputeAspectFitRect(1320, 2868, 355, 147);
+    ASSERT_TRUE(r_port.height == 147 && r_port.width >= 67 && r_port.width <= 69 && r_port.x > 140,
+                "1320x2868 portrait inside 355x147 inline preview should pillarbox center (~68x147)");
+
+    LetterboxRect r_ipad = ComputeAspectFitRect(2732, 2048, 1920, 1080);
+    ASSERT_TRUE(r_ipad.height == 1080 && r_ipad.width >= 1440 && r_ipad.width <= 1442,
+                "2732x2048 iPad Pro inside 1920x1080 fullscreen monitor should fit ~1441x1080");
+
+    // 2. Verify zero-copy preview sampling, duplicate-seq CPU skip, and 1:1 native 2K+ screenshot capture
+#ifdef _WIN32
+    int pid = _getpid();
+#else
+    int pid = static_cast<int>(getpid());
+#endif
+    std::string test_shm = "IosUsbVcamPreviewShotTest_" + std::to_string(pid);
+
+    SharedCaptureProducer producer;
+    ASSERT_TRUE(producer.Open(test_shm), "Failed to create shared memory producer for preview/screenshot test");
+
+    SharedCaptureConsumer preview_consumer;
+    ASSERT_TRUE(preview_consumer.Open(test_shm), "Failed to open shared memory consumer for preview/screenshot test");
+
+    const uint32_t kNativeW = 2868;
+    const uint32_t kNativeH = 1320;
+    std::vector<uint8_t> nv12_src(static_cast<size_t>(kNativeW) * kNativeH * 3ULL / 2ULL, 0);
+    GenerateAnimatedColorBarsNV12(nv12_src.data(), kNativeW, kNativeH, 7);
+
+    producer.SetAdvertisedDimensions(kNativeW, kNativeH);
+    producer.PublishNV12Frame(nv12_src.data(), kNativeW, kNativeH, 111'000'000ULL, kNativeW, kNativeH, 32500U);
+
+    uint64_t last_seq = 0;
+    bool updated = false;
+    uint32_t fit_w = 0, fit_h = 0, sw = 0, sh = 0, kbps = 0;
+    std::vector<uint8_t> preview_bgra;
+
+    ASSERT_TRUE(
+        preview_consumer.ReadLatestPreviewBGRA32(
+            355, 147, false, last_seq, preview_bgra, fit_w, fit_h, sw, sh, &updated, &kbps),
+        "ReadLatestPreviewBGRA32 should succeed on live 2868x1320 frame");
+    ASSERT_TRUE(updated && last_seq == 1ULL, "First preview tick must report out_pixels_updated == true");
+    ASSERT_TRUE(sw == kNativeW && sh == kNativeH && kbps == 32500U, "Preview metadata mismatch");
+    ASSERT_TRUE(fit_h == 147 && fit_w >= 318 && fit_w <= 320, "Preview fit dimensions mismatch");
+    ASSERT_TRUE(preview_bgra.size() == static_cast<size_t>(fit_w) * fit_h * 4ULL && preview_bgra[3] == 255U,
+                "Preview BGRA buffer size or alpha channel invalid");
+
+    // Calling ReadLatestPreviewBGRA32 again with unchanged frame_seq and force_refresh=false MUST skip pixel work!
+    bool updated_dup = true;
+    ASSERT_TRUE(
+        preview_consumer.ReadLatestPreviewBGRA32(
+            355, 147, false, last_seq, preview_bgra, fit_w, fit_h, sw, sh, &updated_dup, &kbps),
+        "Duplicate ReadLatestPreviewBGRA32 should still report producer alive");
+    ASSERT_TRUE(!updated_dup, "Unchanged frame_seq with !force_refresh must skip pixel conversion (0% idle CPU)");
+
+    // Resizing the monitor window (force_refresh=true) must resample cleanly to the new box
+    bool updated_resize = false;
+    ASSERT_TRUE(
+        preview_consumer.ReadLatestPreviewBGRA32(
+            1280, 720, true, last_seq, preview_bgra, fit_w, fit_h, sw, sh, &updated_resize, &kbps),
+        "Resized ReadLatestPreviewBGRA32 should resample cleanly");
+    ASSERT_TRUE(updated_resize && fit_w == 1280 && fit_h >= 588 && fit_h <= 590,
+                "Resized 1280x720 preview fit dimensions mismatch");
+
+    // Full 1:1 native-resolution lossless screenshot capture must return exact 2868x1320 BGRA32
+    std::vector<uint8_t> full_shot_bgra;
+    uint32_t shot_w = 0, shot_h = 0;
+    ASSERT_TRUE(preview_consumer.CaptureLatestFullResBGRA32(full_shot_bgra, shot_w, shot_h),
+                "CaptureLatestFullResBGRA32 failed");
+    ASSERT_TRUE(shot_w == kNativeW && shot_h == kNativeH &&
+                    full_shot_bgra.size() == static_cast<size_t>(kNativeW) * kNativeH * 4ULL,
+                "Full-resolution screenshot dimensions must be exact 1:1 2868x1320");
+    // Top-left bar of 75% broadcast HD color bars (Y=180, U=128, V=128) decodes to RGB(191, 191, 191), A=255
+    ASSERT_TRUE(full_shot_bgra[0] >= 188 && full_shot_bgra[0] <= 194 &&
+                    full_shot_bgra[1] >= 188 && full_shot_bgra[1] <= 194 &&
+                    full_shot_bgra[2] >= 188 && full_shot_bgra[2] <= 194 &&
+                    full_shot_bgra[3] == 255,
+                "Top-left 75% broadcast white bar pixel in full-res screenshot should be ~191 with A=255");
+
+    // Verify timestamped screenshot filename convention
+    std::filesystem::path tmp_dir = std::filesystem::temp_directory_path() / ("jcast_shot_test_" + std::to_string(pid));
+    std::filesystem::path shot_path = BuildTimestampedScreenshotPath(tmp_dir, shot_w, shot_h);
+    std::string fname_u8 = shot_path.filename().string();
+    ASSERT_TRUE(fname_u8.find("JCast_") == 0 && fname_u8.find("_2868x1320.png") != std::string::npos,
+                "BuildTimestampedScreenshotPath filename format mismatch");
+
+#ifdef _WIN32
+    // On Windows (MSVC CI & Windows hosts), verify end-to-end WIC lossless PNG encoding & PNG IHDR header
+    std::string png_err;
+    ASSERT_TRUE(SaveTopDownBGRA32AsPng(full_shot_bgra.data(), shot_w, shot_h, shot_path, &png_err),
+                ("SaveTopDownBGRA32AsPng failed on Windows: " + png_err).c_str());
+    std::ifstream png_in(shot_path, std::ios::binary);
+    uint8_t hdr[24] = {0};
+    png_in.read(reinterpret_cast<char*>(hdr), sizeof(hdr));
+    png_in.close();
+    const uint8_t kPngMagic[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    ASSERT_TRUE(std::memcmp(hdr, kPngMagic, 8) == 0, "Saved screenshot does not start with valid PNG magic signature");
+    uint32_t ihdr_w = (static_cast<uint32_t>(hdr[16]) << 24) | (static_cast<uint32_t>(hdr[17]) << 16) |
+                      (static_cast<uint32_t>(hdr[18]) << 8) | static_cast<uint32_t>(hdr[19]);
+    uint32_t ihdr_h = (static_cast<uint32_t>(hdr[20]) << 24) | (static_cast<uint32_t>(hdr[21]) << 16) |
+                      (static_cast<uint32_t>(hdr[22]) << 8) | static_cast<uint32_t>(hdr[23]);
+    ASSERT_TRUE(ihdr_w == kNativeW && ihdr_h == kNativeH, "PNG IHDR dimensions must match 1:1 2868x1320");
+    std::error_code ec;
+    std::filesystem::remove_all(tmp_dir, ec);
+#endif
+
+    preview_consumer.Close();
+    producer.Close();
+    return true;
+}
+
 }  // namespace
 
 int main() {
-    std::cout << "[JCast for iOS] Running protocol, USB speed gating, updater & 2K+ pipeline unit tests...\n";
+    std::cout << "[JCast for iOS] Running protocol, USB speed gating, updater, preview & 2K+ screenshot unit tests...\n";
     if (!TestExactQuickTimeHexVectors()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestExactQuickTimeHexVectors\n";
     if (!TestSpsResolutionAndAvccConversion()) return EXIT_FAILURE;
@@ -397,6 +515,8 @@ int main() {
     std::cout << "  [PASS] TestUsbSpeedResolutionGatingAndMaxClamp\n";
     if (!TestGitHubReleasesJsonAndSemVerUpdater()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestGitHubReleasesJsonAndSemVerUpdater\n";
+    if (!TestPreviewDownscaleAndFullResScreenshotPipeline()) return EXIT_FAILURE;
+    std::cout << "  [PASS] TestPreviewDownscaleAndFullResScreenshotPipeline\n";
     std::cout << "[JCast for iOS] All tests passed successfully!\n";
     return EXIT_SUCCESS;
 }

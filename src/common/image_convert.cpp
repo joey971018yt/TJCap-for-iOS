@@ -5,6 +5,29 @@
 
 namespace ios_vcam {
 
+LetterboxRect ComputeAspectFitRect(uint32_t src_w, uint32_t src_h, uint32_t box_w, uint32_t box_h) {
+    LetterboxRect r{};
+    if (src_w == 0 || src_h == 0 || box_w == 0 || box_h == 0) {
+        return r;
+    }
+    uint64_t lhs = static_cast<uint64_t>(src_w) * box_h;
+    uint64_t rhs = static_cast<uint64_t>(box_w) * src_h;
+    uint32_t fit_w = box_w;
+    uint32_t fit_h = box_h;
+    if (lhs > rhs) {
+        fit_w = box_w;
+        fit_h = static_cast<uint32_t>((static_cast<uint64_t>(box_w) * src_h + src_w / 2U) / src_w);
+    } else if (lhs < rhs) {
+        fit_h = box_h;
+        fit_w = static_cast<uint32_t>((static_cast<uint64_t>(box_h) * src_w + src_h / 2U) / src_h);
+    }
+    r.width = std::clamp(fit_w, 1U, box_w);
+    r.height = std::clamp(fit_h, 1U, box_h);
+    r.x = (box_w - r.width) / 2U;
+    r.y = (box_h - r.height) / 2U;
+    return r;
+}
+
 void ScaleAndLetterboxNV12(
     const uint8_t* src_y,
     uint32_t src_y_stride,
@@ -191,6 +214,117 @@ void ConvertNV12ToRGB24BottomUp(
                 out[2] = static_cast<uint8_t>(r);
                 out += 3;
             }
+        }
+    }
+}
+
+void ConvertNV12ToBGRA32TopDown(
+    const uint8_t* src_nv12,
+    uint32_t width,
+    uint32_t height,
+    uint8_t* dst_bgra) {
+    if (!src_nv12 || !dst_bgra || width < 2 || height < 2) {
+        return;
+    }
+    const uint8_t* src_y = src_nv12;
+    const uint8_t* src_uv = src_nv12 + static_cast<size_t>(width) * height;
+    size_t dst_stride = static_cast<size_t>(width) * 4U;
+
+    for (uint32_t y = 0; y < height; ++y) {
+        const uint8_t* y_row = src_y + static_cast<size_t>(y) * width;
+        const uint8_t* uv_row = src_uv + static_cast<size_t>(y / 2U) * width;
+        uint8_t* out = dst_bgra + static_cast<size_t>(y) * dst_stride;
+
+        for (uint32_t x = 0; x + 1 < width; x += 2) {
+            int u = static_cast<int>(uv_row[x]) - 128;
+            int v = static_cast<int>(uv_row[x + 1]) - 128;
+
+            int r_add = (459 * v) >> 8;
+            int g_sub = (55 * u + 136 * v) >> 8;
+            int b_add = (541 * u) >> 8;
+
+            for (int k = 0; k < 2; ++k) {
+                int c = std::max(0, static_cast<int>(y_row[x + k]) - 16);
+                int y_scaled = (298 * c + 128) >> 8;
+                out[0] = static_cast<uint8_t>(std::clamp(y_scaled + b_add, 0, 255));
+                out[1] = static_cast<uint8_t>(std::clamp(y_scaled - g_sub, 0, 255));
+                out[2] = static_cast<uint8_t>(std::clamp(y_scaled + r_add, 0, 255));
+                out[3] = 255U;
+                out += 4;
+            }
+        }
+        if ((width & 1U) != 0) {
+            uint32_t last_x = width - 1U;
+            uint32_t uv_x = last_x & ~1U;
+            int u = static_cast<int>(uv_row[uv_x]) - 128;
+            int v = static_cast<int>(uv_row[uv_x + 1]) - 128;
+            int c = std::max(0, static_cast<int>(y_row[last_x]) - 16);
+            int y_scaled = (298 * c + 128) >> 8;
+            out[0] = static_cast<uint8_t>(std::clamp(y_scaled + ((541 * u) >> 8), 0, 255));
+            out[1] = static_cast<uint8_t>(std::clamp(y_scaled - ((55 * u + 136 * v) >> 8), 0, 255));
+            out[2] = static_cast<uint8_t>(std::clamp(y_scaled + ((459 * v) >> 8), 0, 255));
+            out[3] = 255U;
+        }
+    }
+}
+
+void SampleNV12ToBGRA32Bilinear(
+    const uint8_t* src_nv12,
+    uint32_t src_w,
+    uint32_t src_h,
+    uint8_t* dst_bgra,
+    uint32_t dst_w,
+    uint32_t dst_h) {
+    if (!src_nv12 || !dst_bgra || src_w < 2 || src_h < 2 || dst_w == 0 || dst_h == 0) {
+        return;
+    }
+    if (src_w == dst_w && src_h == dst_h) {
+        ConvertNV12ToBGRA32TopDown(src_nv12, src_w, src_h, dst_bgra);
+        return;
+    }
+
+    const uint8_t* src_y = src_nv12;
+    const uint8_t* src_uv = src_nv12 + static_cast<size_t>(src_w) * src_h;
+    const uint32_t uv_max_x = (src_w - 2U) & ~1U;
+    const uint32_t uv_max_y = (src_h / 2U) > 0 ? ((src_h / 2U) - 1U) : 0U;
+
+    const uint64_t x_step_fp =
+        (dst_w > 1) ? ((static_cast<uint64_t>(src_w - 1U) << 8) / (dst_w - 1U)) : 0ULL;
+    const uint64_t y_step_fp =
+        (dst_h > 1) ? ((static_cast<uint64_t>(src_h - 1U) << 8) / (dst_h - 1U)) : 0ULL;
+
+    uint64_t sy_fp = 0;
+    for (uint32_t dy = 0; dy < dst_h; ++dy, sy_fp += y_step_fp) {
+        uint32_t sy0 = std::min(static_cast<uint32_t>(sy_fp >> 8), src_h - 1U);
+        uint32_t sy1 = std::min(sy0 + 1U, src_h - 1U);
+        uint32_t wy = static_cast<uint32_t>(sy_fp & 0xFFU);
+
+        const uint8_t* y_row0 = src_y + static_cast<size_t>(sy0) * src_w;
+        const uint8_t* y_row1 = src_y + static_cast<size_t>(sy1) * src_w;
+        const uint8_t* uv_row = src_uv + static_cast<size_t>(std::min(sy0 >> 1, uv_max_y)) * src_w;
+        uint8_t* out = dst_bgra + static_cast<size_t>(dy) * dst_w * 4U;
+
+        uint64_t sx_fp = 0;
+        for (uint32_t dx = 0; dx < dst_w; ++dx, sx_fp += x_step_fp) {
+            uint32_t sx0 = std::min(static_cast<uint32_t>(sx_fp >> 8), src_w - 1U);
+            uint32_t sx1 = std::min(sx0 + 1U, src_w - 1U);
+            uint32_t wx = static_cast<uint32_t>(sx_fp & 0xFFU);
+
+            uint32_t top = y_row0[sx0] * (256U - wx) + y_row0[sx1] * wx;
+            uint32_t bot = y_row1[sx0] * (256U - wx) + y_row1[sx1] * wx;
+            int y_val = static_cast<int>((top * (256U - wy) + bot * wy + 32768U) >> 16);
+
+            uint32_t uv_x = std::min(sx0 & ~1U, uv_max_x);
+            int u = static_cast<int>(uv_row[uv_x]) - 128;
+            int v = static_cast<int>(uv_row[uv_x + 1U]) - 128;
+
+            int c = std::max(0, y_val - 16);
+            int y_scaled = (298 * c + 128) >> 8;
+            out[0] = static_cast<uint8_t>(std::clamp(y_scaled + ((541 * u) >> 8), 0, 255));
+            out[1] = static_cast<uint8_t>(std::clamp(y_scaled - ((55 * u + 136 * v) >> 8), 0, 255));
+            out[2] = static_cast<uint8_t>(std::clamp(y_scaled + ((459 * v) >> 8), 0, 255));
+            out[3] = 255U;
+            out += 4;
         }
     }
 }

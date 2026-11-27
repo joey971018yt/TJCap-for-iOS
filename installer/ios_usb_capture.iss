@@ -1,8 +1,8 @@
 ﻿[Setup]
 AppId={{8E74A2B1-5C19-4D83-9A41-2F6C8D90E199}
 AppName=JCast for iOS
-AppVersion=1.5.1
-AppVerName=JCast for iOS v1.5.1
+AppVersion=1.6.0
+AppVerName=JCast for iOS v1.6.0
 AppPublisher=JCast Project
 AppPublisherURL=https://github.com/joey971018yt/iOS-usb-cam
 DefaultDirName={autopf}\JCast for iOS
@@ -17,7 +17,7 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 OutputDir=..\build-installer
-OutputBaseFilename=JCast-for-iOS-Setup-v1.5.1
+OutputBaseFilename=JCast-for-iOS-Setup-v1.6.0
 CloseApplications=yes
 
 [Tasks]

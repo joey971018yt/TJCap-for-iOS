@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace ios_vcam {
 
@@ -187,6 +188,27 @@ public:
         uint64_t& out_pts_ns,
         uint32_t* out_src_w = nullptr,
         uint32_t* out_src_h = nullptr);
+
+    // Zero-intermediate-copy live preview sampler: directly scales mapped NV12 slot to aspect-fitted BGRA32.
+    // Skips pixel conversion completely when frame_seq == io_last_seq and !force_refresh.
+    bool ReadLatestPreviewBGRA32(
+        uint32_t box_w,
+        uint32_t box_h,
+        bool force_refresh,
+        uint64_t& io_last_seq,
+        std::vector<uint8_t>& out_bgra_topdown,
+        uint32_t& out_fit_w,
+        uint32_t& out_fit_h,
+        uint32_t& out_src_w,
+        uint32_t& out_src_h,
+        bool* out_pixels_updated = nullptr,
+        uint32_t* out_bitrate_kbps = nullptr);
+
+    // Captures full 1:1 native-resolution top-down BGRA32 frame for lossless PNG screenshots & clipboard
+    bool CaptureLatestFullResBGRA32(
+        std::vector<uint8_t>& out_bgra_topdown,
+        uint32_t& out_width,
+        uint32_t& out_height);
 
     size_t ReadAudioPcmS16LE(int16_t* out_stereo_samples, size_t requested_stereo_frames);
 
