@@ -1,6 +1,19 @@
 # 版本更新日誌 (Changelog)
 
-本文件記錄 **JCast for iOS**（原 `iOS USB Capture Card` / `ios-usb-vcam`）各版本的功能新增、架構優化與問題修復。
+本文件記錄 **TJCap for iOS**（原 `JCast for iOS` / `iOS USB Capture Card`）各版本的功能新增、架構優化與問題修復。
+
+---
+
+## [v2.0.0] - 2026-11-27 — 正式更名「TJCap for iOS」全新品牌版本
+
+### 🏷️ 品牌正式更名與升級相容 (Rebrand & Seamless Upgrade)
+- **正式更名為「TJCap for iOS」**：
+  - 全面更新主程式檔名（`TJCap for iOS.exe`）、Win32 檔案版本資源、Manifest 識別名稱、Windows 安裝程式（`TJCap-for-iOS-Setup-v2.0.0.exe`）、免安裝便攜包（`TJCap-for-iOS-Portable-v2.0.0.zip`）、自動更新引擎與 GitHub 專案連線位址（`joey971018yt/TJCap-for-iOS`）。
+  - **DirectShow 虛擬擷取卡同步更新**：顯示名稱更新為 **`TJCap for iOS (Video)`** 與 **`TJCap for iOS (Audio)`**，並**嚴格保留原本的底層 COM `CLSID`**，無縫銜接既有 OBS 場景。
+  - **診斷報錯、截圖與獨立視窗全面對齊**：錯誤碼更新為 **`TJCAP-E101` ～ `TJCAP-E503`**（內部解析器維持向下相容舊版 `JCAST-` 代碼與 `[JCAST-DIAG|` 日誌）、預設截圖路徑更新為 **`%USERPROFILE%\Pictures\TJCap Screenshots\TJCap_*.png`**、獨立外接螢幕視窗更新為 **`TJCap Live Monitor`**。
+- **舊版偏好繼承與無殘留覆蓋升級**：
+  - 語言設定登錄檔遷移至 `HKCU\Software\TJCapForiOS\Language`，首次讀取時若尚未建立會自動繼承舊版 `HKCU\Software\JCastForiOS\Language` 偏好。
+  - Inno Setup 安裝程式保留同一 `AppId`，覆蓋升級時透過 `[InstallDelete]` 自動清理舊版 `JCast for iOS.exe` 與舊捷徑；便攜版自更新腳本改為自動偵測單一頂層目錄並支援清除舊版執行檔。
 
 ---
 
