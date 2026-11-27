@@ -397,6 +397,13 @@ bool MfH264Decoder::DecodeAnnexB(
         return false;
     }
     if (hint_width > 0 && hint_height > 0) {
+        if (hint_width > impl_->coded_width || hint_height > impl_->coded_height) {
+            uint32_t aligned_w = (hint_width + 15U) & ~15U;
+            uint32_t aligned_h = (hint_height + 15U) & ~15U;
+            if (impl_->ConfigureInputType(aligned_w, aligned_h)) {
+                impl_->NegotiateOutputType();
+            }
+        }
         impl_->crop_width = hint_width;
         impl_->crop_height = hint_height;
     }

@@ -29,6 +29,7 @@ constexpr int kIdBtnMockTest = 1002;
 constexpr int kIdBtnRepairDriver = 1003;
 constexpr int kIdBtnUninstall = 1004;
 constexpr int kIdBtnCopyObsGuide = 1005;
+constexpr int kIdComboResMode = 1010;
 constexpr int kIdComboStatusBar = 1011;
 constexpr int kIdComboAudioOut = 1012;
 constexpr int kIdChkHwDecode = 1013;
@@ -79,7 +80,6 @@ std::filesystem::path AppDir() {
     return std::filesystem::path(buf).parent_path();
 }
 
-// Removes Windows Explorer "Mark of the Web" (:Zone.Identifier ADS) after extracting a downloaded ZIP
 void UnblockDownloadedFiles(const std::filesystem::path& base_dir) {
     const wchar_t* rel_files[] = {
         L"ios_vcam_dshow.dll",
@@ -118,7 +118,6 @@ SystemHealth ProbeSystemHealth(const std::filesystem::path& base_dir) {
     std::error_code ec;
     h.libusb_dll_present = std::filesystem::exists(base_dir / L"libusb-1.0.dll", ec);
 
-    // 1. Check DirectShow Video Capture CLSID registration & DLL path match
     const wchar_t* kRegPath = L"CLSID\\{8E74A2B1-5C19-4D83-9A41-2F6C8D90E101}\\InprocServer32";
     HKEY hKey = nullptr;
     if (RegOpenKeyExW(HKEY_CLASSES_ROOT, kRegPath, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
@@ -138,7 +137,6 @@ SystemHealth ProbeSystemHealth(const std::filesystem::path& base_dir) {
         RegCloseKey(hKey);
     }
 
-    // 2. Check libusb0 kernel driver service
     SC_HANDLE scm = OpenSCManagerW(nullptr, nullptr, GENERIC_READ);
     if (scm) {
         SC_HANDLE svc = OpenServiceW(scm, L"libusb0", SERVICE_QUERY_CONFIG);
@@ -149,7 +147,6 @@ SystemHealth ProbeSystemHealth(const std::filesystem::path& base_dir) {
         CloseServiceHandle(scm);
     }
 
-    // 3. Check plugged-in Apple iOS USB composite parent device
     HDEVINFO dev_info = SetupDiGetClassDevsW(nullptr, L"USB", nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT);
     if (dev_info != INVALID_HANDLE_VALUE) {
         SP_DEVINFO_DATA dev_data{};
@@ -224,8 +221,8 @@ public:
         RegisterClassExW(&wc);
 
         UINT dpi = GetSystemDpiSafe(nullptr);
-        int win_w = Scale(760, dpi);
-        int win_h = Scale(640, dpi);
+        int win_w = Scale(780, dpi);
+        int win_h = Scale(680, dpi);
 
         RECT work{};
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
@@ -235,7 +232,7 @@ public:
         hwnd_ = CreateWindowExW(
             0,
             wc.lpszClassName,
-            L"iOS USB 有線虛擬擷取卡 — 一鍵智慧控制台",
+            L"iOS USB 有線虛擬擷取卡 — 一鍵智慧控制台 (支援 2K+ 原生自適應比例)",
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
             pos_x, pos_y, win_w, win_h,
             nullptr, nullptr, hInst, this);
@@ -305,20 +302,47 @@ private:
         int margin = Scale(18, dpi);
         int content_w = cw - margin * 2;
 
-        // Top banner occupies y = 14 .. 134
+        // Top banner: y = 14 .. 136
         banner_rect_ = {margin, Scale(14, dpi), cw - margin, Scale(136, dpi)};
 
-        // Group 1: Preferences (y = 146 .. 268)
+        // Group 1: Preferences (y = 148 .. 302)
         int grp1_y = Scale(148, dpi);
-        int grp1_h = Scale(122, dpi);
+        int grp1_h = Scale(154, dpi);
         HWND grp_pref = CreateWindowExW(
-            0, L"BUTTON", L"擷取設定（可隨時調整）",
+            0, L"BUTTON", L"擷取畫質、比例與音訊設定",
             WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
             margin, grp1_y, content_w, grp1_h, hwnd_, nullptr, hinst_, nullptr);
         SendMessageW(grp_pref, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
 
-        int lbl_w = Scale(155, dpi);
-        int row1_y = grp1_y + Scale(28, dpi);
+        int lbl_w = Scale(158, dpi);
+        int combo_w = content_w - lbl_w - Scale(28, dpi);
+
+        // Row 0: Resolution & Adaptive Aspect Ratio
+        int row0_y = grp1_y + Scale(28, dpi);
+        HWND lbl_res = CreateWindowExW(
+            0, L"STATIC", L"輸出畫質與比例模式：",
+            WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
+            margin + Scale(14, dpi), row0_y, lbl_w, Scale(26, dpi), hwnd_, nullptr, hinst_, nullptr);
+        SendMessageW(lbl_res, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+
+        combo_res_mode_ = CreateWindowExW(
+            0, L"COMBOBOX", L"",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+            margin + Scale(14, dpi) + lbl_w, row0_y, combo_w, Scale(220, dpi),
+            hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdComboResMode)), hinst_, nullptr);
+        SendMessageW(combo_res_mode_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+        SendMessageW(combo_res_mode_, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(L"🌟 2K+ 原生自適應比例（推薦：依 iPhone/iPad 機型自動滿版無黑邊）"));
+        SendMessageW(combo_res_mode_, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(L"✨ 1080p 自適應比例（依機型自動滿版無黑邊、輕量低負載）"));
+        SendMessageW(combo_res_mode_, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(L"🖥 固定 2K 16:9 畫布 (2560×1440，直橫屏旋轉自動補黑邊)"));
+        SendMessageW(combo_res_mode_, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(L"🖥 固定 1080p 16:9 畫布 (1920×1080，傳統直播相容模式)"));
+        SendMessageW(combo_res_mode_, CB_SETCURSEL, 0, 0);
+
+        // Row 1: Status bar style
+        int row1_y = grp1_y + Scale(60, dpi);
         HWND lbl_bar = CreateWindowExW(
             0, L"STATIC", L"手機頂部狀態列樣式：",
             WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
@@ -328,7 +352,7 @@ private:
         combo_status_bar_ = CreateWindowExW(
             0, L"COMBOBOX", L"",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-            margin + Scale(14, dpi) + lbl_w, row1_y, content_w - lbl_w - Scale(28, dpi), Scale(200, dpi),
+            margin + Scale(14, dpi) + lbl_w, row1_y, combo_w, Scale(200, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdComboStatusBar)), hinst_, nullptr);
         SendMessageW(combo_status_bar_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
         SendMessageW(combo_status_bar_, CB_ADDSTRING, 0,
@@ -337,7 +361,8 @@ private:
                      reinterpret_cast<LPARAM>(L"保留手機真實狀態列（顯示真實時間、電量與通知圖示）"));
         SendMessageW(combo_status_bar_, CB_SETCURSEL, 0, 0);
 
-        int row2_y = grp1_y + Scale(60, dpi);
+        // Row 2: PC Audio Routing / Monitoring
+        int row2_y = grp1_y + Scale(92, dpi);
         HWND lbl_aud = CreateWindowExW(
             0, L"STATIC", L"電腦端音訊監聽／轉發：",
             WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
@@ -347,22 +372,23 @@ private:
         combo_audio_ = CreateWindowExW(
             0, L"COMBOBOX", L"",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-            margin + Scale(14, dpi) + lbl_w, row2_y, content_w - lbl_w - Scale(28, dpi), Scale(240, dpi),
+            margin + Scale(14, dpi) + lbl_w, row2_y, combo_w, Scale(240, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdComboAudioOut)), hinst_, nullptr);
         SendMessageW(combo_audio_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
         PopulateAudioEndpoints();
 
-        int row3_y = grp1_y + Scale(92, dpi);
+        // Row 3: GPU Hardware Decode
+        int row3_y = grp1_y + Scale(124, dpi);
         chk_hw_decode_ = CreateWindowExW(
-            0, L"BUTTON", L"啟用 GPU 硬體超低延遲解碼 (D3D11VA，建議開啟)",
+            0, L"BUTTON", L"啟用 GPU 硬體超低延遲解碼 (D3D11VA，2K+60fps 建議保持開啟)",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
             margin + Scale(14, dpi), row3_y, content_w - Scale(28, dpi), Scale(22, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdChkHwDecode)), hinst_, nullptr);
         SendMessageW(chk_hw_decode_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
         SendMessageW(chk_hw_decode_, BM_SETCHECK, BST_CHECKED, 0);
 
-        // Group 2: One-Click Action Buttons (y = 280 .. 404)
-        int grp2_y = Scale(280, dpi);
+        // Group 2: One-Click Action Buttons (y = 312 .. 430)
+        int grp2_y = Scale(312, dpi);
         int grp2_h = Scale(118, dpi);
         HWND grp_act = CreateWindowExW(
             0, L"BUTTON", L"一鍵自動化操作",
@@ -374,7 +400,7 @@ private:
         int inner_w = content_w - btn_pad * 2;
         int main_btn_y = grp2_y + Scale(26, dpi);
         btn_smart_start_ = CreateWindowExW(
-            0, L"BUTTON", L"🚀 智慧一鍵啟動（自動檢查安裝驅動 ➔ 開始 iPhone 投影）",
+            0, L"BUTTON", L"🚀 智慧一鍵啟動（自動檢查安裝驅動 ➔ 開始 2K+ 原生投影）",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             margin + btn_pad, main_btn_y, inner_w, Scale(42, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnSmartStart)), hinst_, nullptr);
@@ -389,7 +415,7 @@ private:
 
         int cur_x = margin + btn_pad;
         btn_mock_ = CreateWindowExW(
-            0, L"BUTTON", L"🧪 免插手機自測 (彩條+測試音)",
+            0, L"BUTTON", L"🧪 免插手機自測 (2K 彩條+測試音)",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             cur_x, sub_btn_y, w_mock, Scale(34, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnMockTest)), hinst_, nullptr);
@@ -419,11 +445,11 @@ private:
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnUninstall)), hinst_, nullptr);
         SendMessageW(btn_uninstall_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
 
-        // Group 3: Live Diagnostics & FPS Log
-        int log_lbl_y = Scale(408, dpi);
+        // Group 3: Live Diagnostics, Mbps Bitrate & FPS Log
+        int log_lbl_y = Scale(440, dpi);
         HWND lbl_log = CreateWindowExW(
             0, L"STATIC",
-            L"即時運行狀態與幀率日誌（OBS 視訊來源請選：iOS USB Capture Card (Video)）：",
+            L"即時狀態、原生解析度比例與碼率監控（先啟動投影再開 OBS 可自動抓滿版 2K+ 比例）：",
             WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
             margin, log_lbl_y, content_w, Scale(22, dpi), hwnd_, nullptr, hinst_, nullptr);
         SendMessageW(lbl_log, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
@@ -438,7 +464,7 @@ private:
         SendMessageW(edit_log_, WM_SETFONT, reinterpret_cast<WPARAM>(font_mono_), TRUE);
         SendMessageW(edit_log_, EM_SETLIMITTEXT, 256 * 1024, 0);
 
-        AppendLogLine(L"[歡迎] 已開啟 iOS USB 擷取卡控制台！直接點擊上方「智慧一鍵啟動」即可自動完成安裝並開始投影。");
+        AppendLogLine(L"[歡迎] 已支援 2K+ 裝置原生解析度與自動比例自適應（iPhone 19.5:9 / iPad 4:3 滿版無黑邊）！");
         RefreshHealthAndUi();
         SetTimer(hwnd_, kTimerRefreshId, 2000, nullptr);
     }
@@ -502,9 +528,10 @@ private:
                 SetWindowTextW(btn_mock_, L"■ 停止自測訊號");
             } else {
                 SetWindowTextW(btn_smart_start_, L"■ 停止 iPhone 投影擷取（安全切回一般充電/傳輸模式）");
-                SetWindowTextW(btn_mock_, L"🧪 免插手機自測 (彩條+測試音)");
+                SetWindowTextW(btn_mock_, L"🧪 免插手機自測 (2K 彩條+測試音)");
                 EnableWindow(btn_mock_, FALSE);
             }
+            EnableWindow(combo_res_mode_, FALSE);
             EnableWindow(combo_status_bar_, FALSE);
             EnableWindow(combo_audio_, FALSE);
             EnableWindow(chk_hw_decode_, FALSE);
@@ -515,12 +542,13 @@ private:
                                (health_.ios_usb == IosUsbState::PluggedNeedFilter);
             if (needs_setup) {
                 SetWindowTextW(btn_smart_start_,
-                               L"🚀 智慧一鍵啟動（自動安裝驅動與虛擬擷取卡 ➔ 開始 iPhone 投影）");
+                               L"🚀 智慧一鍵啟動（自動安裝驅動與虛擬擷取卡 ➔ 開始 2K+ 自適應投影）");
             } else {
-                SetWindowTextW(btn_smart_start_, L"▶ 開始 iPhone 有線投影擷取 (1080p60)");
+                SetWindowTextW(btn_smart_start_, L"▶ 開始 iPhone / iPad 有線投影擷取 (2K+ 自適應 @ 60fps)");
             }
-            SetWindowTextW(btn_mock_, L"🧪 免插手機自測 (彩條+測試音)");
+            SetWindowTextW(btn_mock_, L"🧪 免插手機自測 (2K 彩條+測試音)");
             EnableWindow(btn_mock_, TRUE);
+            EnableWindow(combo_res_mode_, TRUE);
             EnableWindow(combo_status_bar_, TRUE);
             EnableWindow(combo_audio_, TRUE);
             EnableWindow(chk_hw_decode_, TRUE);
@@ -548,8 +576,8 @@ private:
             bg_color = RGB(232, 248, 238);
             accent_color = RGB(22, 136, 72);
             headline = running_mock_
-                           ? L"🟢 正在輸出 1080p60 動態彩條與 48kHz 測試音（請開啟 OBS 預覽）"
-                           : L"🟢 iPhone 有線投影擷取執行中（1080p60 視訊 + 48kHz 音訊）";
+                           ? L"🟢 正在輸出 2K@60fps 動態彩條與 48kHz 測試音（請開啟 OBS 預覽）"
+                           : L"🟢 iPhone / iPad 有線投影執行中（2K+ 自適應比例 @ 60fps + 48kHz 音訊）";
         } else if (health_.ios_usb == IosUsbState::PluggedZadigConflict) {
             bg_color = RGB(255, 240, 240);
             accent_color = RGB(196, 43, 28);
@@ -558,15 +586,15 @@ private:
                    health_.ios_usb == IosUsbState::PluggedNeedFilter) {
             bg_color = RGB(255, 248, 232);
             accent_color = RGB(180, 105, 14);
-            headline = L"⚡ 準備開始：請點擊下方「智慧一鍵啟動」自動完成驅動掛載與投影";
+            headline = L"⚡ 準備開始：請點擊下方「智慧一鍵啟動」自動完成驅動掛載與 2K+ 投影";
         } else if (health_.ios_usb == IosUsbState::PluggedReady) {
             bg_color = RGB(234, 247, 240);
             accent_color = RGB(20, 130, 75);
-            headline = L"✅ iPhone 與驅動皆已就緒！點擊「開始 iPhone 有線投影擷取」即可連線";
+            headline = L"✅ iPhone 與驅動皆已就緒！點擊「開始有線投影擷取」自動匹配原生 2K+ 比例";
         } else {
             bg_color = RGB(242, 245, 250);
             accent_color = RGB(45, 95, 185);
-            headline = L"🔌 驅動已就緒 — 請插上已解鎖並點「信任」的 iPhone，或點「免插手機自測」";
+            headline = L"🔌 驅動已就緒 — 請插上已解鎖並點「信任」的 iPhone/iPad，或點「免插手機自測」";
         }
 
         RECT local_rc{0, 0, w, h};
@@ -574,7 +602,6 @@ private:
         FillRect(mem_dc, &local_rc, bg_brush);
         DeleteObject(bg_brush);
 
-        // Left accent stripe & subtle border
         UINT dpi = GetSystemDpiSafe(hwnd_);
         RECT stripe{0, 0, Scale(6, dpi), h};
         HBRUSH acc_brush = CreateSolidBrush(accent_color);
@@ -593,11 +620,11 @@ private:
 
         std::wstring dshow_txt;
         if (health_.dshow == DshowRegState::Ready) {
-            dshow_txt = L"• DirectShow 視訊/音訊虛擬擷取卡：✅ 已安裝";
+            dshow_txt = L"• DirectShow 2K+ 視訊/音訊虛擬擷取卡：✅ 已安裝";
         } else if (health_.dshow == DshowRegState::PathMismatch) {
-            dshow_txt = L"• DirectShow 視訊/音訊虛擬擷取卡：⚠️ 資料夾已移動（點一鍵啟動自動更新路徑）";
+            dshow_txt = L"• DirectShow 2K+ 視訊/音訊虛擬擷取卡：⚠️ 資料夾已移動（點一鍵啟動自動更新路徑）";
         } else {
-            dshow_txt = L"• DirectShow 視訊/音訊虛擬擷取卡：⏳ 尚未註冊（點一鍵啟動自動完成）";
+            dshow_txt = L"• DirectShow 2K+ 視訊/音訊虛擬擷取卡：⏳ 尚未註冊（點一鍵啟動自動完成）";
         }
 
         std::wstring usb_drv_txt = health_.libusb_service_ok
@@ -610,7 +637,7 @@ private:
                 phone_txt = L"• iPhone / iPad USB 狀態：✅ 已連線且 UpperFilter 過濾層已掛載";
                 break;
             case IosUsbState::PluggedNeedFilter:
-                phone_txt = L"• iPhone / iPad USB 狀態：📱 已偵測到手機（點一鍵啟動自動掛載過濾層）";
+                phone_txt = L"• iPhone / iPad USB 狀態：📱 已偵測到裝置（點一鍵啟動自動掛載過濾層）";
                 break;
             case IosUsbState::PluggedZadigConflict:
                 phone_txt = L"• iPhone / iPad USB 狀態：❌ 偵測到 " + health_.ios_service_name +
@@ -667,7 +694,6 @@ private:
         }
 
         if (sei.hProcess) {
-            // Pump UI messages responsiveness while waiting for setup tool (~0.5 - 2s)
             while (WaitForSingleObject(sei.hProcess, 50) == WAIT_TIMEOUT) {
                 MSG msg{};
                 while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -703,7 +729,6 @@ private:
             return;
         }
 
-        // Ensure DirectShow virtual cameras are registered so OBS can see them immediately
         health_ = ProbeSystemHealth(base_dir_);
         if (mock_mode) {
             if (health_.dshow != DshowRegState::Ready) {
@@ -740,15 +765,18 @@ private:
         SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
 
         std::wstring cmd = L"\"" + host_exe.wstring() + L"\" --stop-event " + event_name;
+
+        LRESULT res_idx = SendMessageW(combo_res_mode_, CB_GETCURSEL, 0, 0);
+        if (res_idx == 1) cmd += L" --res native1080";
+        else if (res_idx == 2) cmd += L" --res 1440p";
+        else if (res_idx == 3) cmd += L" --res 1080p";
+        else cmd += L" --res native";
+
         if (mock_mode) {
             cmd += L" --mock";
         } else {
             LRESULT bar_idx = SendMessageW(combo_status_bar_, CB_GETCURSEL, 0, 0);
-            if (bar_idx == 1) {
-                cmd += L" --mode clean";
-            } else {
-                cmd += L" --mode valeria";
-            }
+            cmd += (bar_idx == 1) ? L" --mode clean" : L" --mode valeria";
             if (SendMessageW(chk_hw_decode_, BM_GETCHECK, 0, 0) != BST_CHECKED) {
                 cmd += L" --sw-decode";
             }
@@ -788,7 +816,7 @@ private:
             &si,
             &pi);
 
-        CloseHandle(write_pipe);  // Child owns the write end now
+        CloseHandle(write_pipe);
 
         if (!ok) {
             CloseHandle(read_pipe);
@@ -807,8 +835,8 @@ private:
         host_running_.store(true, std::memory_order_release);
         RefreshHealthAndUi();
 
-        AppendLogLine(mock_mode ? L"=== 已啟動免手機自測模式 (1080p60 彩條 + 48kHz 測試音) ==="
-                                : L"=== 已啟動 iPhone 有線投影擷取主程式 ===");
+        AppendLogLine(mock_mode ? L"=== 已啟動免手機自測模式 (2K@60fps 彩條 + 48kHz 測試音) ==="
+                                : L"=== 已啟動 iPhone / iPad 有線投影擷取 (2K+ 原生自適應) ===");
 
         if (log_reader_thread_.joinable()) {
             log_reader_thread_.join();
@@ -853,7 +881,6 @@ private:
             SetEvent(hEvt);
         }
         if (hProc) {
-            // Wait up to 3.5s for graceful HPA0/HPD0 & USBMux restore before fallback terminate
             if (WaitForSingleObject(hProc, 3500) == WAIT_TIMEOUT) {
                 TerminateProcess(hProc, 0);
             }
@@ -872,13 +899,12 @@ private:
 
     void ShowAndCopyObsGuide() {
         const wchar_t* guide =
-            L"【OBS Studio / Discord 設定步驟】\r\n\r\n"
-            L"1. 開啟 OBS Studio，在「來源」面板點擊「＋」➔「視訊擷取裝置」。\r\n"
-            L"2.「裝置」下拉選單選擇：iOS USB Capture Card (Video)\r\n"
-            L"3. 將設定視窗往下捲動到最底部：\r\n"
-            L"   ☑ 勾選「使用自訂音訊裝置」\r\n"
-            L"   音訊裝置選擇：iOS USB Capture Card (Audio)\r\n"
-            L"4. 點擊「確定」，即可獲得 1080p60 超低延遲畫面與 48kHz 立體聲！\r\n\r\n"
+            L"【OBS Studio 2K+ 滿版自適應比例設定步驟】\r\n\r\n"
+            L"1. 先在本控制台插上手機、打開要直播的畫面方向（橫向或直向），點擊「智慧一鍵啟動」。\r\n"
+            L"2. 開啟 OBS Studio，新增「視訊擷取裝置」➔ 選擇：iOS USB Capture Card (Video)\r\n"
+            L"3.「解析度/FPS 類型」保持「裝置預設值」：OBS 會自動抓到您 iPhone/iPad 的原生 2K+ 解析度與真實比例（滿版零黑邊）！\r\n"
+            L"   （若您先開了 OBS 才連手機，只要在 OBS 來源點一下「停用 ➔ 啟用」就會自動刷新成原生比例）\r\n"
+            L"4. 往下捲動到底部勾選「使用自訂音訊裝置」➔ 選擇：iOS USB Capture Card (Audio)\r\n\r\n"
             L"（裝置名稱已複製到剪貼簿：iOS USB Capture Card (Video)）";
 
         if (OpenClipboard(hwnd_)) {
@@ -896,7 +922,7 @@ private:
             }
             CloseClipboard();
         }
-        MessageBoxW(hwnd_, guide, L"OBS / 直播軟體設定教學", MB_ICONINFORMATION | MB_OK);
+        MessageBoxW(hwnd_, guide, L"OBS 2K+ 自適應比例設定教學", MB_ICONINFORMATION | MB_OK);
     }
 
     static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -1040,6 +1066,7 @@ private:
     SystemHealth health_;
 
     RECT banner_rect_{};
+    HWND combo_res_mode_ = nullptr;
     HWND combo_status_bar_ = nullptr;
     HWND combo_audio_ = nullptr;
     HWND chk_hw_decode_ = nullptr;
@@ -1068,13 +1095,12 @@ private:
 }  // namespace
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
-    // Best-effort PerMonitorV2 DPI awareness before window creation
     HMODULE u32 = GetModuleHandleW(L"user32.dll");
     if (u32) {
         using SetDpiCtxFn = BOOL(WINAPI*)(HANDLE);
         auto fn = reinterpret_cast<SetDpiCtxFn>(GetProcAddress(u32, "SetProcessDpiAwarenessContext"));
         if (fn) {
-            fn(reinterpret_cast<HANDLE>(static_cast<INT_PTR>(-4)));  // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+            fn(reinterpret_cast<HANDLE>(static_cast<INT_PTR>(-4)));
         }
     }
 
@@ -1093,8 +1119,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        if (!IsDialogMessageW(
-                GetActiveWindow(), &msg)) {
+        if (!IsDialogMessageW(GetActiveWindow(), &msg)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }

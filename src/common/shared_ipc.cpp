@@ -50,7 +50,7 @@ bool SharedCaptureProducer::Open(const std::string& shm_name) {
     }
     mapping_handle_ = hMap;
     layout_ = static_cast<SharedCaptureLayout*>(view);
-    if (!already_existed || layout_->magic != kShmMagic) {
+    if (!already_existed || layout_->magic != kShmMagic || layout_->version != kShmVersion) {
         std::memset(view, 0, sizeof(SharedCaptureLayout));
         layout_ = new (view) SharedCaptureLayout();
         layout_->magic = kShmMagic;
@@ -74,7 +74,7 @@ bool SharedCaptureProducer::Open(const std::string& shm_name) {
     shm_fd_ = fd;
     owns_unlink_ = true;
     layout_ = static_cast<SharedCaptureLayout*>(view);
-    if (layout_->magic != kShmMagic) {
+    if (layout_->magic != kShmMagic || layout_->version != kShmVersion) {
         std::memset(view, 0, sizeof(SharedCaptureLayout));
         layout_ = new (view) SharedCaptureLayout();
         layout_->magic = kShmMagic;
@@ -114,6 +114,14 @@ void SharedCaptureProducer::Close() {
 #endif
 }
 
+void SharedCaptureProducer::SetAdvertisedDimensions(uint32_t width, uint32_t height) {
+    if (!layout_) return;
+    uint32_t aw = 0, ah = 0;
+    AlignAdaptiveDimensions(width, height, aw, ah);
+    layout_->active_width.store(aw, std::memory_order_release);
+    layout_->active_height.store(ah, std::memory_order_release);
+}
+
 uint8_t* SharedCaptureProducer::AcquireBackbufferSlot(uint32_t& out_slot_index) {
     if (!layout_) {
         out_slot_index = 0;
@@ -129,18 +137,29 @@ uint8_t* SharedCaptureProducer::AcquireBackbufferSlot(uint32_t& out_slot_index) 
 
 void SharedCaptureProducer::PublishBackbufferSlot(
     uint32_t slot_index,
+    uint32_t frame_width,
+    uint32_t frame_height,
     uint64_t pts_ns,
     uint32_t src_width,
-    uint32_t src_height) {
+    uint32_t src_height,
+    uint32_t bitrate_kbps) {
     if (!layout_ || slot_index >= kVideoSlotCount) {
         return;
     }
+    uint32_t fw = 0, fh = 0;
+    AlignAdaptiveDimensions(frame_width, frame_height, fw, fh);
+
     uint64_t seq = layout_->total_video_frames.load(std::memory_order_relaxed) + 1ULL;
     layout_->slot_headers[slot_index].frame_seq = seq;
     layout_->slot_headers[slot_index].pts_ns = pts_ns;
-    layout_->slot_headers[slot_index].source_width = src_width;
-    layout_->slot_headers[slot_index].source_height = src_height;
+    layout_->slot_headers[slot_index].frame_width = fw;
+    layout_->slot_headers[slot_index].frame_height = fh;
+    layout_->slot_headers[slot_index].source_width = src_width > 0 ? src_width : fw;
+    layout_->slot_headers[slot_index].source_height = src_height > 0 ? src_height : fh;
+    layout_->slot_headers[slot_index].bitrate_kbps = bitrate_kbps;
 
+    layout_->active_width.store(fw, std::memory_order_release);
+    layout_->active_height.store(fh, std::memory_order_release);
     layout_->latest_video_slot.store(slot_index, std::memory_order_release);
     layout_->total_video_frames.store(seq, std::memory_order_release);
     TouchHeartbeat(true);
@@ -149,11 +168,20 @@ void SharedCaptureProducer::PublishBackbufferSlot(
 }
 
 void SharedCaptureProducer::PublishNV12Frame(
-    const uint8_t* nv12_1080p,
+    const uint8_t* nv12_data,
+    uint32_t frame_width,
+    uint32_t frame_height,
     uint64_t pts_ns,
     uint32_t src_width,
-    uint32_t src_height) {
-    if (!layout_ || !nv12_1080p) {
+    uint32_t src_height,
+    uint32_t bitrate_kbps) {
+    if (!layout_ || !nv12_data) {
+        return;
+    }
+    uint32_t fw = 0, fh = 0;
+    AlignAdaptiveDimensions(frame_width, frame_height, fw, fh);
+    size_t frame_bytes = static_cast<size_t>(fw) * fh * 3ULL / 2ULL;
+    if (frame_bytes > kMaxNv12FrameBytes) {
         return;
     }
     uint32_t slot = 0;
@@ -161,8 +189,8 @@ void SharedCaptureProducer::PublishNV12Frame(
     if (!dst) {
         return;
     }
-    std::memcpy(dst, nv12_1080p, kNv12FrameBytes);
-    PublishBackbufferSlot(slot, pts_ns, src_width, src_height);
+    std::memcpy(dst, nv12_data, frame_bytes);
+    PublishBackbufferSlot(slot, fw, fh, pts_ns, src_width, src_height, bitrate_kbps);
 }
 
 void SharedCaptureProducer::PushAudioPcmS16LE(const int16_t* stereo_samples, size_t stereo_frame_count) {
@@ -281,8 +309,29 @@ bool SharedCaptureConsumer::IsProducerAlive(uint64_t max_age_ms) const {
     return (now >= hb) ? ((now - hb) <= max_age_ms) : true;
 }
 
+bool SharedCaptureConsumer::QueryAdvertisedDimensions(uint32_t& out_width, uint32_t& out_height) const {
+    if (!layout_) {
+        return false;
+    }
+    uint64_t hb = layout_->producer_heartbeat_ms.load(std::memory_order_acquire);
+    uint64_t now = MonotonicMillisNow();
+    if (now > hb && (now - hb) > 2500ULL) {
+        return false;
+    }
+    uint32_t w = layout_->active_width.load(std::memory_order_acquire);
+    uint32_t h = layout_->active_height.load(std::memory_order_acquire);
+    if (w < 64 || h < 64 || static_cast<uint64_t>(w) * h > kMaxVideoPixels) {
+        return false;
+    }
+    AlignAdaptiveDimensions(w, h, out_width, out_height);
+    return true;
+}
+
 bool SharedCaptureConsumer::ReadLatestNV12Frame(
     uint8_t* out_nv12,
+    size_t out_capacity,
+    uint32_t& out_frame_w,
+    uint32_t& out_frame_h,
     uint64_t& out_frame_seq,
     uint64_t& out_pts_ns,
     uint32_t* out_src_w,
@@ -300,8 +349,17 @@ bool SharedCaptureConsumer::ReadLatestNV12Frame(
     }
 
     const VideoSlotHeader hdr = layout_->slot_headers[slot];
-    std::memcpy(out_nv12, layout_->video_slots[slot], kNv12FrameBytes);
+    uint32_t fw = 0, fh = 0;
+    AlignAdaptiveDimensions(hdr.frame_width, hdr.frame_height, fw, fh);
+    size_t needed_bytes = static_cast<size_t>(fw) * fh * 3ULL / 2ULL;
+    if (needed_bytes > out_capacity || needed_bytes > kMaxNv12FrameBytes) {
+        return false;
+    }
 
+    std::memcpy(out_nv12, layout_->video_slots[slot], needed_bytes);
+
+    out_frame_w = fw;
+    out_frame_h = fh;
     out_frame_seq = hdr.frame_seq;
     out_pts_ns = hdr.pts_ns;
     if (out_src_w) {
@@ -325,12 +383,10 @@ size_t SharedCaptureConsumer::ReadAudioPcmS16LE(int16_t* out_stereo_samples, siz
 
     uint64_t wpos = layout_->audio_write_frame_pos.load(std::memory_order_acquire);
     if (!audio_cursor_initialized_) {
-        // Start slightly behind write cursor (~10ms = 480 frames) for jitter-free low-latency playback
         audio_read_cursor_ = (wpos > 480ULL) ? (wpos - 480ULL) : wpos;
         audio_cursor_initialized_ = true;
     }
 
-    // Resync if consumer lagged by more than ~150ms (7200 frames) or ring wrapped
     if (wpos > audio_read_cursor_ + 7200ULL || audio_read_cursor_ > wpos) {
         audio_read_cursor_ = (wpos > 480ULL) ? (wpos - 480ULL) : wpos;
     }

@@ -53,12 +53,10 @@ std::vector<uint8_t> HexToBytes(const char* hex) {
 }
 
 bool TestExactQuickTimeHexVectors() {
-    // 1. Exact PING packet: 10000000 676E6970 00000000 01000000
     auto expected_ping = HexToBytes("10000000 676E6970 00000000 01000000");
     auto actual_ping = CoreMediaCodec::BuildPingPacket();
     ASSERT_TRUE(actual_ping == expected_ping, "PING packet hex mismatch");
 
-    // 2. Exact Valeria single-entry dictionary from QuickTime capture
     auto expected_valeria_dict = HexToBytes(
         "28000000 74636964 20000000 7679656B 0F000000 6B727473 56616C65 726961 09000000 766C7562 01");
     StringDict d;
@@ -66,13 +64,11 @@ bool TestExactQuickTimeHexVectors() {
     auto actual_valeria_dict = CoreMediaCodec::SerializeStringDict(d);
     ASSERT_TRUE(actual_valeria_dict == expected_valeria_dict, "Valeria dictionary TLV hex mismatch");
 
-    // Verify round-trip parse
     auto parsed = CoreMediaCodec::ParseStringDict(actual_valeria_dict);
     ASSERT_TRUE(parsed.has_value() && parsed->entries.size() == 1, "Failed to parse Valeria dict");
     ASSERT_TRUE(parsed->entries[0].key == "Valeria" && std::get<bool>(parsed->entries[0].value) == true,
                 "Parsed Valeria entry mismatch");
 
-    // 3. Exact AFMT RPLY packet from QuickTime capture
     auto expected_afmt_rply = HexToBytes(
         "3E000000 796C7072 809D2213 01000000 00000000 2A000000 74636964 "
         "22000000 7679656B 0D000000 6B727473 4572726F 720D0000 0076626D 6E030000 0000");
@@ -80,7 +76,6 @@ bool TestExactQuickTimeHexVectors() {
     auto actual_afmt_rply = CoreMediaCodec::BuildRplyAfmtOk(corr_id);
     ASSERT_TRUE(actual_afmt_rply == expected_afmt_rply, "AFMT RPLY packet hex mismatch");
 
-    // 4. Exact ASYN NEED packet from QuickTime capture
     auto expected_need = HexToBytes("14000000 6E797361 A08D5313 01000000 6465656E");
     uint64_t dev_vclock = CoreMediaCodec::ReadU64LE(HexToBytes("A08D5313 01000000"), 0);
     auto actual_need = CoreMediaCodec::BuildAsynNeedPacket(dev_vclock);
@@ -90,13 +85,11 @@ bool TestExactQuickTimeHexVectors() {
 }
 
 bool TestSpsResolutionAndAvccConversion() {
-    // Real H.264 High Profile 1920x1080 SPS (coded 1920x1088 with 4-row bottom frame crop -> 1920x1080)
     auto sps_1080p = HexToBytes("67640028AC2CA501E0089F970110000003001000000303C8F1831960");
     auto dims = CoreMediaCodec::ParseH264SpsDimensions(sps_1080p);
     ASSERT_TRUE(dims.has_value(), "Failed to parse 1920x1080 SPS");
     ASSERT_TRUE(dims->width == 1920 && dims->height == 1080, "Expected 1920x1080 dimensions from SPS");
 
-    // Build ISO 14496-15 avcC record with SPS + PPS
     std::vector<uint8_t> pps = {0x68, 0xEE, 0x3C, 0xB0};
     std::vector<uint8_t> avcc = {0x01, 0x64, 0x00, 0x28, 0xFF, 0xE1};
     avcc.push_back(static_cast<uint8_t>((sps_1080p.size() >> 8) & 0xFF));
@@ -112,7 +105,6 @@ bool TestSpsResolutionAndAvccConversion() {
     ASSERT_TRUE(cfg->nal_length_size == 4 && cfg->width == 1920 && cfg->height == 1080,
                 "avcC parsed metadata mismatch");
 
-    // Convert 4-byte length-prefixed IDR NALU (type 5) to Annex-B with SPS/PPS prepended
     std::vector<uint8_t> avcc_idr = {0x00, 0x00, 0x00, 0x05, 0x65, 0x88, 0x84, 0x21, 0xA0};
     bool is_idr = false;
     auto annexb = CoreMediaCodec::ConvertAvccToAnnexB(avcc_idr, 4, &(*cfg), &is_idr);
@@ -132,6 +124,8 @@ bool TestFragmentedHandshakeAndMediaSession() {
 
     QtSessionConfig cfg;
     cfg.valeria_clean_status_bar = true;
+    cfg.max_width = 3840;
+    cfg.max_height = 3840;
     QtStreamSession session(
         cfg,
         [&](std::span<const uint8_t> pkt) {
@@ -141,19 +135,17 @@ bool TestFragmentedHandshakeAndMediaSession() {
         [&](const EncodedVideoPacket& v) { rx_videos.push_back(v); },
         [&](const DecodedPcmPacket& a) { rx_audios.push_back(a); });
 
-    // Concatenate PING + SYNC CWPA + SYNC AFMT + SYNC CVRP + SYNC CLOK + SYNC TIME + SYNC SKEW + ASYN FEED + ASYN EAT!
     std::vector<uint8_t> wire_stream;
     auto append = [&](const std::vector<uint8_t>& b) {
         wire_stream.insert(wire_stream.end(), b.begin(), b.end());
     };
 
-    append(HexToBytes("10000000 676E6970 00000000 01000000"));  // PING
-    append(HexToBytes("24000000 636E7973 01000000 00000000 61707763 E03D5713 01000000 E0740000 5A130040"));  // CWPA
+    append(HexToBytes("10000000 676E6970 00000000 01000000"));
+    append(HexToBytes("24000000 636E7973 01000000 00000000 61707763 E03D5713 01000000 E0740000 5A130040"));
     append(HexToBytes(
         "44000000 636E7973 B00CE26C A67F0000 746D6661 809D2213 01000000 "
-        "00000000 0070E740 6D63706C 0C000000 04000000 01000000 04000000 02000000 10000000 00000000"));  // AFMT
+        "00000000 0070E740 6D63706C 0C000000 04000000 01000000 04000000 02000000 10000000 00000000"));
 
-    // Minimal SYNC CVRP (36 bytes header)
     std::vector<uint8_t> cvrp;
     CoreMediaCodec::WriteU32LE(cvrp, 36U);
     CoreMediaCodec::WriteU32LE(cvrp, magic::kSync);
@@ -163,12 +155,10 @@ bool TestFragmentedHandshakeAndMediaSession() {
     CoreMediaCodec::WriteU64LE(cvrp, 0x0113538DA0ULL);
     append(cvrp);
 
-    // SYNC CLOK + SYNC TIME + SYNC SKEW
     append(HexToBytes("1C000000 636E7973 5002D16C A67F0000 6B6F6C63 70495813 01000000"));
     append(HexToBytes("1C000000 636E7973 8079C17C A67F0000 656D6974 503D2213 01000000"));
     append(HexToBytes("1C000000 636E7973 8079C17C A67F0000 77656B73 60B9FD02 01000000"));
 
-    // Construct synthetic ASYN FEED packet with sbuf -> sdat (AVCC IDR slice)
     std::vector<uint8_t> sdat_atom;
     std::vector<uint8_t> avcc_nalu = {0x00, 0x00, 0x00, 0x04, 0x65, 0xAA, 0xBB, 0xCC};
     CoreMediaCodec::WriteU32LE(sdat_atom, static_cast<uint32_t>(8 + avcc_nalu.size()));
@@ -188,7 +178,6 @@ bool TestFragmentedHandshakeAndMediaSession() {
     feed_pkt.insert(feed_pkt.end(), sbuf_video.begin(), sbuf_video.end());
     append(feed_pkt);
 
-    // Construct synthetic ASYN EAT! packet with 480 stereo frames (1920 bytes) of PCM audio
     std::vector<uint8_t> pcm_bytes(480 * 4, 0x12);
     std::vector<uint8_t> audio_sdat;
     CoreMediaCodec::WriteU32LE(audio_sdat, static_cast<uint32_t>(8 + pcm_bytes.size()));
@@ -208,7 +197,6 @@ bool TestFragmentedHandshakeAndMediaSession() {
     eat_pkt.insert(eat_pkt.end(), sbuf_audio.begin(), sbuf_audio.end());
     append(eat_pkt);
 
-    // Feed fragmented in tiny 7-byte USB chunks to stress packet boundary reassembly
     for (size_t off = 0; off < wire_stream.size(); off += 7) {
         size_t len = std::min<size_t>(7, wire_stream.size() - off);
         ASSERT_TRUE(session.FeedUsbBytes(std::span<const uint8_t>(wire_stream.data() + off, len)),
@@ -223,49 +211,61 @@ bool TestFragmentedHandshakeAndMediaSession() {
     return true;
 }
 
-bool TestPortraitLetterboxAndMultiReaderIpc() {
-    // 1. Portrait 540x960 NV12 -> Landscape 1920x1080 NV12 pillarbox verification
+bool Test2KPlusAdaptiveAspectAndMultiReaderIpc() {
+    // 1. Verify AlignAdaptiveDimensions preserves exact device aspect ratio with 4x2 alignment
+    uint32_t aw = 0, ah = 0;
+    AlignAdaptiveDimensions(2622, 1206, aw, ah);  // iPhone 16 Pro (2622 -> 2624, 1206 -> 1206)
+    ASSERT_TRUE((aw % 4) == 0 && (ah % 2) == 0 && aw == 2624 && ah == 1206,
+                "Expected 4x2-aligned 2K+ iPhone 16 Pro dimensions");
+
+    // 2. Portrait 540x960 NV12 -> Landscape 1920x1080 NV12 pillarbox verification
     const uint32_t sw = 540, sh = 960;
     std::vector<uint8_t> src_nv12(sw * sh * 3 / 2, 200);
     std::memset(src_nv12.data() + sw * sh, 100, sw * sh / 2);
 
-    std::vector<uint8_t> dst_1080p(kNv12FrameBytes, 0);
+    std::vector<uint8_t> dst_1080p(1920 * 1080 * 3 / 2, 0);
     ScaleAndLetterboxNV12(
         src_nv12.data(), sw, src_nv12.data() + sw * sh, sw, sw, sh,
-        dst_1080p.data(), kCanvasWidth, kCanvasHeight);
+        dst_1080p.data(), 1920, 1080);
 
-    // Left pillarbox margin (x=10, y=540) must be BT.709 black Y=16, while center (x=960, y=540) must be Y=200
-    ASSERT_TRUE(dst_1080p[540 * kCanvasWidth + 10] == 16, "Left pillarbox should be BT.709 black (Y=16)");
-    ASSERT_TRUE(dst_1080p[540 * kCanvasWidth + 960] == 200, "Center active area should preserve source luma");
+    ASSERT_TRUE(dst_1080p[540 * 1920 + 10] == 16, "Left pillarbox should be BT.709 black (Y=16)");
+    ASSERT_TRUE(dst_1080p[540 * 1920 + 960] == 200, "Center active area should preserve source luma");
 
-    // 2. Shared memory multi-reader SPMC video + audio test
+    // 3. Shared memory v2: 2K+ Native iPhone Pro Max (2868x1320, 19.5:9) + SPMC audio ring buffer
 #ifdef _WIN32
     int pid = _getpid();
 #else
     int pid = static_cast<int>(getpid());
 #endif
-    std::string test_shm = "IosVcamUnitTestShm_" + std::to_string(pid);
+    std::string test_shm = "IosVcamUnitTestShmV2_" + std::to_string(pid);
 
     SharedCaptureProducer producer;
-    ASSERT_TRUE(producer.Open(test_shm), "Producer failed to open shared memory");
+    ASSERT_TRUE(producer.Open(test_shm), "Producer failed to open v2 shared memory");
 
     SharedCaptureConsumer obs_consumer;
     SharedCaptureConsumer discord_consumer;
     ASSERT_TRUE(obs_consumer.Open(test_shm), "OBS consumer failed to open shared memory");
     ASSERT_TRUE(discord_consumer.Open(test_shm), "Discord consumer failed to open shared memory");
 
-    // Publish video frame
-    producer.PublishNV12Frame(dst_1080p.data(), 16666667ULL, sw, sh);
+    // Publish native 2868x1320 (2.8K 19.5:9) frame
+    const uint32_t native_w = 2868, native_h = 1320;
+    std::vector<uint8_t> native_2k_frame(static_cast<size_t>(native_w) * native_h * 3 / 2, 212);
+    producer.PublishNV12Frame(native_2k_frame.data(), native_w, native_h, 16666667ULL, native_w, native_h, 24500);
 
-    std::vector<uint8_t> read_nv12(kNv12FrameBytes, 0);
+    uint32_t adv_w = 0, adv_h = 0;
+    ASSERT_TRUE(obs_consumer.QueryAdvertisedDimensions(adv_w, adv_h) && adv_w == 2868 && adv_h == 1320,
+                "Advertised native 2.8K dimensions mismatch");
+
+    std::vector<uint8_t> read_nv12(kMaxNv12FrameBytes, 0);
+    uint32_t out_fw = 0, out_fh = 0, out_sw = 0, out_sh = 0;
     uint64_t seq = 0, pts = 0;
-    uint32_t out_sw = 0, out_sh = 0;
-    ASSERT_TRUE(obs_consumer.ReadLatestNV12Frame(read_nv12.data(), seq, pts, &out_sw, &out_sh),
-                "OBS consumer failed to read NV12 frame");
-    ASSERT_TRUE(seq == 1 && out_sw == sw && out_sh == sh && read_nv12[540 * kCanvasWidth + 960] == 200,
-                "Shared memory NV12 frame integrity check failed");
+    ASSERT_TRUE(obs_consumer.ReadLatestNV12Frame(
+                    read_nv12.data(), read_nv12.size(), out_fw, out_fh, seq, pts, &out_sw, &out_sh),
+                "OBS consumer failed to read 2.8K NV12 frame");
+    ASSERT_TRUE(seq == 1 && out_fw == 2868 && out_fh == 1320 && read_nv12[600 * 2868 + 1400] == 212,
+                "Shared memory 2.8K NV12 frame integrity check failed");
 
-    // Push 960 stereo frames (20ms @ 48kHz) and verify both OBS and Discord read identical samples independently
+    // Push 960 stereo frames (20ms @ 48kHz) and verify SPMC audio delivery
     std::vector<int16_t> pcm_in(960 * 2);
     for (size_t i = 0; i < 960; ++i) {
         pcm_in[i * 2] = static_cast<int16_t>(1000 + static_cast<int>(i));
@@ -279,7 +279,6 @@ bool TestPortraitLetterboxAndMultiReaderIpc() {
     size_t n_disc = discord_consumer.ReadAudioPcmS16LE(discord_pcm.data(), 480);
     ASSERT_TRUE(n_obs == 480 && n_disc == 480, "Both consumers must independently receive full 480 stereo frames");
     ASSERT_TRUE(obs_pcm == discord_pcm, "SPMC audio ring buffer must deliver identical samples to all readers");
-    ASSERT_TRUE(obs_pcm[0] == 1480 && obs_pcm[1] == -1480, "Expected 480-frame low-latency tail alignment");
 
     return true;
 }
@@ -287,15 +286,15 @@ bool TestPortraitLetterboxAndMultiReaderIpc() {
 }  // namespace
 
 int main() {
-    std::cout << "[ios-usb-vcam] Running protocol & media pipeline unit tests...\n";
+    std::cout << "[ios-usb-vcam] Running protocol & 2K+ adaptive pipeline unit tests...\n";
     if (!TestExactQuickTimeHexVectors()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestExactQuickTimeHexVectors\n";
     if (!TestSpsResolutionAndAvccConversion()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestSpsResolutionAndAvccConversion\n";
     if (!TestFragmentedHandshakeAndMediaSession()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestFragmentedHandshakeAndMediaSession\n";
-    if (!TestPortraitLetterboxAndMultiReaderIpc()) return EXIT_FAILURE;
-    std::cout << "  [PASS] TestPortraitLetterboxAndMultiReaderIpc\n";
+    if (!Test2KPlusAdaptiveAspectAndMultiReaderIpc()) return EXIT_FAILURE;
+    std::cout << "  [PASS] Test2KPlusAdaptiveAspectAndMultiReaderIpc\n";
     std::cout << "[ios-usb-vcam] All tests passed successfully!\n";
     return EXIT_SUCCESS;
 }

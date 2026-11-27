@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <numeric>
 #include <string>
 #include <thread>
 #include <vector>
@@ -44,12 +45,20 @@ void SignalHandler(int) {
 }
 #endif
 
+enum class ResolutionMode {
+    Native2KPlus,  // HPD1 3840x3840 -> exact device native pixels & aspect ratio (zero black bars)
+    Native1080,    // HPD1 1920x1920 -> 1080p-tier exact device aspect ratio (zero black bars)
+    Fixed1440p,    // HPD1 2560x2560 -> letterboxed into 2560x1440 (16:9 2K QHD)
+    Fixed1080p,    // HPD1 1920x1920 -> letterboxed into 1920x1080 (16:9 FHD)
+};
+
 struct HostOptions {
     bool mock_mode = false;
-    bool clean_status_bar = false;  // --mode clean preserves real iPhone time/battery bar
+    bool clean_status_bar = false;
     bool prefer_hw_decode = true;
     bool enable_audio_route = true;
     bool list_audio_only = false;
+    ResolutionMode res_mode = ResolutionMode::Native2KPlus;
     std::string preferred_udid;
     std::string audio_out_match;
     std::string stop_event_name;
@@ -60,11 +69,15 @@ void PrintUsage() {
         << "iOS USB Universal Virtual Capture Card Host (ios_vcam_host.exe)\n"
         << "Usage: ios_vcam_host.exe [options]\n\n"
         << "Options:\n"
-        << "  --mock                 Run self-test pipeline (1080p60 color bars + 48kHz stereo test tone)\n"
+        << "  --res <mode>           Resolution & aspect mode (default: native):\n"
+        << "                           native     : 2K+ device-native resolution & aspect ratio (zero black bars)\n"
+        << "                           native1080 : 1080p-class device-native aspect ratio (zero black bars)\n"
+        << "                           1440p      : Fixed 2560x1440 (2K 16:9) letterboxed canvas\n"
+        << "                           1080p      : Fixed 1920x1080 (FHD 16:9) letterboxed canvas\n"
+        << "  --mock                 Run self-test pipeline (2560x1440@60fps color bars + 48kHz stereo tone)\n"
         << "  --mode <valeria|clean> Status bar mode: 'valeria' (9:41 clean bar, default) or 'clean' (real bar)\n"
         << "  --udid <serial>        Connect to a specific iPhone/iPad serial/UDID substring\n"
         << "  --audio-out <name>     Route 48kHz audio via WASAPI to endpoint matching <name>\n"
-        << "                         (auto-routes to VB-Audio 'CABLE Input' if installed)\n"
         << "  --no-audio-route       Disable automatic WASAPI virtual cable audio routing\n"
         << "  --list-audio           List active Windows audio playback endpoints and exit\n"
         << "  --sw-decode            Force CPU H.264 decoding instead of D3D11VA hardware acceleration\n"
@@ -80,6 +93,17 @@ bool ParseArgs(int argc, char** argv, HostOptions& opts) {
             return false;
         } else if (arg == "--mock") {
             opts.mock_mode = true;
+        } else if (arg == "--res" && i + 1 < argc) {
+            std::string r = argv[++i];
+            if (r == "native1080") {
+                opts.res_mode = ResolutionMode::Native1080;
+            } else if (r == "1440p" || r == "2k") {
+                opts.res_mode = ResolutionMode::Fixed1440p;
+            } else if (r == "1080p" || r == "fhd") {
+                opts.res_mode = ResolutionMode::Fixed1080p;
+            } else {
+                opts.res_mode = ResolutionMode::Native2KPlus;
+            }
         } else if (arg == "--mode" && i + 1 < argc) {
             std::string m = argv[++i];
             opts.clean_status_bar = (m == "clean" || m == "native");
@@ -100,8 +124,15 @@ bool ParseArgs(int argc, char** argv, HostOptions& opts) {
     return true;
 }
 
-int RunMockPipeline(SharedCaptureProducer& producer) {
-    std::cout << "[Host] Starting --mock self-test generator (1920x1080@60fps NV12 + 48kHz Stereo LPCM)...\n"
+int RunMockPipeline(SharedCaptureProducer& producer, ResolutionMode res_mode) {
+    uint32_t mock_w = (res_mode == ResolutionMode::Fixed1080p || res_mode == ResolutionMode::Native1080)
+                          ? 1920U
+                          : 2560U;
+    uint32_t mock_h = (mock_w == 2560U) ? 1440U : 1080U;
+    producer.SetAdvertisedDimensions(mock_w, mock_h);
+
+    std::cout << "[Host] Starting --mock self-test generator (" << mock_w << "x" << mock_h
+              << "@60fps NV12 + 48kHz Stereo LPCM)...\n"
               << "[Host] Open OBS / Discord / Zoom and select 'iOS USB Capture Card (Video)'!\n"
               << "[Host] Press Ctrl+C to stop.\n";
 
@@ -120,11 +151,11 @@ int RunMockPipeline(SharedCaptureProducer& producer) {
         uint32_t slot = 0;
         uint8_t* dst_nv12 = producer.AcquireBackbufferSlot(slot);
         if (dst_nv12) {
-            GenerateAnimatedColorBarsNV12(dst_nv12, kCanvasWidth, kCanvasHeight, frame_idx);
-            producer.PublishBackbufferSlot(slot, frame_idx * kFrameIntervalNs, kCanvasWidth, kCanvasHeight);
+            GenerateAnimatedColorBarsNV12(dst_nv12, mock_w, mock_h, frame_idx);
+            producer.PublishBackbufferSlot(
+                slot, mock_w, mock_h, frame_idx * kFrameIntervalNs, mock_w, mock_h, 0);
         }
 
-        // Gentle -18 dBFS stereo sine chord (440 Hz Left, 554.37 Hz Right)
         for (size_t i = 0; i < kAudioFramesPerVideoFrame; ++i) {
             pcm_chunk[i * 2] = static_cast<int16_t>(std::sin(phase_l) * 4000.0);
             pcm_chunk[i * 2 + 1] = static_cast<int16_t>(std::sin(phase_r) * 4000.0);
@@ -137,7 +168,8 @@ int RunMockPipeline(SharedCaptureProducer& producer) {
 
         ++frame_idx;
         if (frame_idx % 300 == 0) {
-            std::cout << "[Mock] Published " << frame_idx << " frames (1920x1080@60fps, 48kHz Stereo)\n";
+            std::cout << "[Mock] Published " << frame_idx << " frames (" << mock_w << "x" << mock_h
+                      << "@60fps, 48kHz Stereo)\n";
         }
 
         next_tick += std::chrono::nanoseconds(kFrameIntervalNs);
@@ -221,6 +253,12 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    if (opts.res_mode == ResolutionMode::Fixed1080p) {
+        producer.SetAdvertisedDimensions(1920, 1080);
+    } else {
+        producer.SetAdvertisedDimensions(2560, 1440);
+    }
+
     WasapiAudioRouter audio_router;
     if (opts.enable_audio_route) {
         if (audio_router.StartAutoRoute(kDefaultShmName, opts.audio_out_match)) {
@@ -229,13 +267,12 @@ int main(int argc, char** argv) {
         } else if (!opts.audio_out_match.empty()) {
             std::cerr << "[Audio] Warning: No playback endpoint matched \"" << opts.audio_out_match << "\".\n";
         } else {
-            std::cout << "[Audio] DirectShow 'iOS USB Capture Card (Audio)' active. "
-                         "(Install VB-Audio Virtual Cable if you also want kernel mic routing.)\n";
+            std::cout << "[Audio] DirectShow 'iOS USB Capture Card (Audio)' active (48kHz LPCM).\n";
         }
     }
 
     if (opts.mock_mode) {
-        int rc = RunMockPipeline(producer);
+        int rc = RunMockPipeline(producer, opts.res_mode);
         audio_router.Stop();
         producer.Close();
 #ifdef _WIN32
@@ -247,8 +284,7 @@ int main(int argc, char** argv) {
     UsbIosTransport usb;
     std::string usb_err;
     if (!usb.Initialize(&usb_err)) {
-        std::cerr << "[USB Error] " << usb_err << "\n"
-                  << "Tip: Run 'ios_vcam_host.exe --mock' to test the virtual capture card without an iPhone.\n";
+        std::cerr << "[USB Error] " << usb_err << "\n";
         audio_router.Stop();
         producer.Close();
 #ifdef _WIN32
@@ -257,9 +293,13 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    std::cout << "[Host] Waiting for iPhone / iPad over USB (Status bar mode: "
-              << (opts.clean_status_bar ? "clean native" : "QuickTime Valeria") << ")...\n"
-              << "[Host] Press Ctrl+C at any time to stop and restore standard USBMux mode.\n";
+    const char* res_label = "2K+ Native Adaptive";
+    if (opts.res_mode == ResolutionMode::Native1080) res_label = "1080p Native Adaptive";
+    else if (opts.res_mode == ResolutionMode::Fixed1440p) res_label = "Fixed 2K 2560x1440";
+    else if (opts.res_mode == ResolutionMode::Fixed1080p) res_label = "Fixed 1080p 1920x1080";
+
+    std::cout << "[Host] Waiting for iPhone / iPad over USB (Resolution: " << res_label
+              << ", Status bar: " << (opts.clean_status_bar ? "clean native" : "QuickTime Valeria") << ")...\n";
 
     while (!g_stop_flag.load(std::memory_order_relaxed)) {
         producer.TouchHeartbeat(false);
@@ -291,31 +331,70 @@ int main(int argc, char** argv) {
         }
         std::cout << "[Decoder] Windows Media Foundation H.264 MFT initialized ("
                   << (decoder.IsHardwareAccelerated() ? "D3D11VA Hardware GPU" : "CPU Software Fallback")
-                  << ", Low-Latency ON)\n";
+                  << ", 2K+ Adaptive Ready)\n";
 
         uint64_t decoded_frames = 0;
+        uint64_t window_video_bytes = 0;
+        uint32_t latest_kbps = 0;
         auto stats_timer = std::chrono::steady_clock::now();
         uint32_t last_src_w = 0, last_src_h = 0;
 
         QtSessionConfig qcfg;
         qcfg.valeria_clean_status_bar = !opts.clean_status_bar;
+        if (opts.res_mode == ResolutionMode::Native2KPlus) {
+            qcfg.max_width = 3840;
+            qcfg.max_height = 3840;
+        } else if (opts.res_mode == ResolutionMode::Fixed1440p) {
+            qcfg.max_width = 2560;
+            qcfg.max_height = 2560;
+        } else {
+            qcfg.max_width = 1920;
+            qcfg.max_height = 1920;
+        }
 
         QtStreamSession session(
             qcfg,
             [&](std::span<const uint8_t> out_pkt) { return usb.SendBulk(out_pkt); },
             [&](const EncodedVideoPacket& vpkt) {
+                window_video_bytes += vpkt.annexb_data.size();
+
                 decoder.DecodeAnnexB(
                     vpkt.annexb_data,
                     vpkt.pts_ns,
                     vpkt.width,
                     vpkt.height,
                     [&](const DecodedNV12View& view) {
+                        uint32_t out_w = 0, out_h = 0;
+                        if (opts.res_mode == ResolutionMode::Native2KPlus ||
+                            opts.res_mode == ResolutionMode::Native1080) {
+                            AlignAdaptiveDimensions(view.width, view.height, out_w, out_h);
+                        } else if (opts.res_mode == ResolutionMode::Fixed1440p) {
+                            out_w = 2560U;
+                            out_h = 1440U;
+                        } else {
+                            out_w = 1920U;
+                            out_h = 1080U;
+                        }
+
                         if (view.width != last_src_w || view.height != last_src_h) {
                             last_src_w = view.width;
                             last_src_h = view.height;
-                            std::cout << "[Video] Source stream resolution: " << last_src_w << "x" << last_src_h
-                                      << " -> Letterboxed to 1920x1080 NV12\n";
+                            uint32_t g = std::gcd(last_src_w, last_src_h);
+                            double aspect = (last_src_h > 0)
+                                                ? (static_cast<double>(last_src_w) / static_cast<double>(last_src_h))
+                                                : 1.777;
+                            std::printf(
+                                "[Video] Device native resolution: %ux%u (ratio %.2f:1, %u:%u) -> Output %ux%u\n",
+                                last_src_w,
+                                last_src_h,
+                                aspect,
+                                g ? (last_src_w / g) : last_src_w,
+                                g ? (last_src_h / g) : last_src_h,
+                                out_w,
+                                out_h);
+                            std::fflush(stdout);
                         }
+
                         uint32_t slot = 0;
                         uint8_t* dst_nv12 = producer.AcquireBackbufferSlot(slot);
                         if (dst_nv12) {
@@ -327,23 +406,31 @@ int main(int argc, char** argv) {
                                 view.width,
                                 view.height,
                                 dst_nv12,
-                                kCanvasWidth,
-                                kCanvasHeight);
-                            producer.PublishBackbufferSlot(slot, view.pts_ns, view.width, view.height);
+                                out_w,
+                                out_h);
+                            producer.PublishBackbufferSlot(
+                                slot, out_w, out_h, view.pts_ns, view.width, view.height, latest_kbps);
                         }
+
                         ++decoded_frames;
                         auto now = std::chrono::steady_clock::now();
                         double elapsed = std::chrono::duration<double>(now - stats_timer).count();
-                        if (elapsed >= 5.0) {
+                        if (elapsed >= 4.0) {
                             double fps = static_cast<double>(decoded_frames) / elapsed;
+                            double mbps = (static_cast<double>(window_video_bytes) * 8.0) / (elapsed * 1e6);
+                            latest_kbps = static_cast<uint32_t>(mbps * 1000.0);
                             std::printf(
-                                "[Stream] %.1f fps | Input %ux%u -> 1920x1080 | Audio pkts: %llu\n",
+                                "[Stream] %.1f fps | Bitrate: %.1f Mbps | Output: %ux%u (Source %ux%u) | Audio pkts: %llu\n",
                                 fps,
+                                mbps,
+                                out_w,
+                                out_h,
                                 last_src_w,
                                 last_src_h,
                                 static_cast<unsigned long long>(session.AudioPacketsReceived()));
                             std::fflush(stdout);
                             decoded_frames = 0;
+                            window_video_bytes = 0;
                             stats_timer = now;
                         }
                     });
@@ -362,7 +449,6 @@ int main(int argc, char** argv) {
             [&](std::span<const uint8_t> usb_chunk) { return session.FeedUsbBytes(usb_chunk); },
             &loop_err);
 
-        // Send graceful HPA0 + HPD0 stop commands if shutting down while device is still attached
         for (const auto& spkt : session.BuildStopPackets()) {
             usb.SendBulk(spkt);
         }

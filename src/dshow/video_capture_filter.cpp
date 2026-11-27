@@ -23,10 +23,29 @@ struct VideoModeSpec {
     PixelSubtype pix;
 };
 
-static constexpr VideoModeSpec kSupportedVideoModes[] = {
+// Static fallback presets exposed alongside dynamic device-native resolution
+static constexpr VideoModeSpec kPresetVideoModes[] = {
+    // 2K QHD Landscape (16:9)
+    {2560, 1440, 60, PixelSubtype::NV12},
+    {2560, 1440, 60, PixelSubtype::YUY2},
+    {2560, 1440, 60, PixelSubtype::RGB24},
+    // 2K QHD Portrait (9:16)
+    {1440, 2560, 60, PixelSubtype::NV12},
+    {1440, 2560, 60, PixelSubtype::YUY2},
+    {1440, 2560, 60, PixelSubtype::RGB24},
+    // 2K iPad 4:3 Landscape
+    {2560, 1920, 60, PixelSubtype::NV12},
+    {2560, 1920, 60, PixelSubtype::YUY2},
+    {2560, 1920, 60, PixelSubtype::RGB24},
+    // 1080p FHD Landscape (16:9)
     {1920, 1080, 60, PixelSubtype::NV12},
     {1920, 1080, 60, PixelSubtype::YUY2},
     {1920, 1080, 60, PixelSubtype::RGB24},
+    // 1080p FHD Portrait (9:16)
+    {1080, 1920, 60, PixelSubtype::NV12},
+    {1080, 1920, 60, PixelSubtype::YUY2},
+    {1080, 1920, 60, PixelSubtype::RGB24},
+    // 1080p@30 & 720p@60 compatibility modes
     {1920, 1080, 30, PixelSubtype::NV12},
     {1920, 1080, 30, PixelSubtype::YUY2},
     {1920, 1080, 30, PixelSubtype::RGB24},
@@ -38,13 +57,43 @@ static constexpr VideoModeSpec kSupportedVideoModes[] = {
 size_t CalcFrameByteSize(uint32_t w, uint32_t h, PixelSubtype pix) {
     switch (pix) {
         case PixelSubtype::NV12:
-            return static_cast<size_t>(w) * h * 3U / 2U;
+            return static_cast<size_t>(w) * h * 3ULL / 2ULL;
         case PixelSubtype::YUY2:
-            return static_cast<size_t>(w) * h * 2U;
+            return static_cast<size_t>(w) * h * 2ULL;
         case PixelSubtype::RGB24:
-            return static_cast<size_t>(w) * h * 3U;
+            return static_cast<size_t>(w) * h * 3ULL;
     }
-    return static_cast<size_t>(w) * h * 2U;
+    return static_cast<size_t>(w) * h * 2ULL;
+}
+
+// Queries live advertised device-native dimensions from ios_vcam_host.exe if active, else defaults to 2560x1440 (2K)
+void QueryPreferredNativeDimensions(uint32_t& out_w, uint32_t& out_h) {
+    SharedCaptureConsumer probe;
+    if (probe.Open(kDefaultShmName) && probe.QueryAdvertisedDimensions(out_w, out_h)) {
+        return;
+    }
+    out_w = 2560U;
+    out_h = 1440U;
+}
+
+std::vector<VideoModeSpec> BuildAvailableModesList() {
+    uint32_t dyn_w = 2560U, dyn_h = 1440U;
+    QueryPreferredNativeDimensions(dyn_w, dyn_h);
+
+    std::vector<VideoModeSpec> modes;
+    modes.reserve(3 + std::size(kPresetVideoModes));
+    // Dynamic slot #0..#2: exact native resolution of the currently connected iPhone / iPad!
+    modes.push_back({dyn_w, dyn_h, 60, PixelSubtype::NV12});
+    modes.push_back({dyn_w, dyn_h, 60, PixelSubtype::YUY2});
+    modes.push_back({dyn_w, dyn_h, 60, PixelSubtype::RGB24});
+
+    for (const auto& m : kPresetVideoModes) {
+        if (m.width == dyn_w && m.height == dyn_h && m.fps == 60) {
+            continue;
+        }
+        modes.push_back(m);
+    }
+    return modes;
 }
 
 void BuildVideoMediaType(const VideoModeSpec& spec, AM_MEDIA_TYPE& mt) {
@@ -61,7 +110,9 @@ void BuildVideoMediaType(const VideoModeSpec& spec, AM_MEDIA_TYPE& mt) {
     size_t frame_bytes = CalcFrameByteSize(spec.width, spec.height, spec.pix);
 
     vih->AvgTimePerFrame = avg_time;
-    vih->dwBitRate = static_cast<DWORD>(frame_bytes * 8ULL * spec.fps);
+    // Cap advertised dwBitRate inside DWORD range
+    uint64_t raw_bps = frame_bytes * 8ULL * spec.fps;
+    vih->dwBitRate = static_cast<DWORD>(std::min<uint64_t>(raw_bps, 0x7FFFFFFFULL));
     SetRect(&vih->rcSource, 0, 0, static_cast<int>(spec.width), static_cast<int>(spec.height));
     SetRect(&vih->rcTarget, 0, 0, static_cast<int>(spec.width), static_cast<int>(spec.height));
 
@@ -82,7 +133,7 @@ void BuildVideoMediaType(const VideoModeSpec& spec, AM_MEDIA_TYPE& mt) {
         vih->bmiHeader.biCompression = MAKEFOURCC('Y', 'U', 'Y', '2');
     } else {
         mt.subtype = MEDIASUBTYPE_RGB24;
-        vih->bmiHeader.biHeight = static_cast<LONG>(spec.height);  // Positive = standard bottom-up DIB
+        vih->bmiHeader.biHeight = static_cast<LONG>(spec.height);
         vih->bmiHeader.biBitCount = 24;
         vih->bmiHeader.biCompression = BI_RGB;
     }
@@ -124,9 +175,18 @@ bool ExtractVideoSpecFromMediaType(const AM_MEDIA_TYPE* pmt, VideoModeSpec& out_
         return false;
     }
 
-    if (!((w == 1920 && h == 1080) || (w == 1280 && h == 720))) {
+    // Accept any 4x2-aligned native/custom resolution up to 2K+/4K (kMaxVideoPixels)
+    if (w < 160 || h < 120 || w > static_cast<LONG>(kMaxFrameDimension) ||
+        h > static_cast<LONG>(kMaxFrameDimension)) {
         return false;
     }
+    if ((w % 4) != 0 || (h % 2) != 0) {
+        return false;
+    }
+    if (static_cast<uint64_t>(w) * static_cast<uint64_t>(h) > kMaxVideoPixels) {
+        return false;
+    }
+
     uint32_t fps = static_cast<uint32_t>(std::clamp<LONGLONG>((10000000LL + avg_time / 2) / avg_time, 15, 60));
     out_spec = {static_cast<uint32_t>(w), static_cast<uint32_t>(h), fps, pix};
     return true;
@@ -142,7 +202,6 @@ public:
     explicit VideoOutputPin(VideoCaptureFilter* parent);
     ~VideoOutputPin();
 
-    // IUnknown (delegates lifetime to parent filter while pin is embedded)
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override;
     STDMETHODIMP_(ULONG) AddRef() override;
     STDMETHODIMP_(ULONG) Release() override;
@@ -184,6 +243,7 @@ public:
 
 private:
     void PushLoop();
+    void RefreshDynamicPreferredSpecLocked();
     HRESULT NegotiateAllocator(IMemInputPin* mem_in);
 
     VideoCaptureFilter* filter_ = nullptr;
@@ -192,9 +252,9 @@ private:
     IMemInputPin* mem_input_ = nullptr;
     IMemAllocator* allocator_ = nullptr;
 
-    VideoModeSpec active_spec_{1920, 1080, 60, PixelSubtype::NV12};
+    bool user_explicit_format_ = false;
+    VideoModeSpec active_spec_{2560, 1440, 60, PixelSubtype::NV12};
     AM_MEDIA_TYPE current_mt_{};
-    std::vector<AM_MEDIA_TYPE> supported_mts_;
 
     std::atomic<bool> streaming_{false};
     std::thread worker_;
@@ -239,14 +299,12 @@ public:
         return static_cast<ULONG>(r);
     }
 
-    // IPersist
     STDMETHODIMP GetClassID(CLSID* pClsID) override {
         if (!pClsID) return E_POINTER;
         *pClsID = CLSID_IosUsbVideoCapture;
         return S_OK;
     }
 
-    // IMediaFilter
     STDMETHODIMP Stop() override {
         std::lock_guard<std::mutex> lk(state_mtx_);
         pin_.StopStreaming();
@@ -296,7 +354,6 @@ public:
         return S_OK;
     }
 
-    // IBaseFilter
     STDMETHODIMP EnumPins(IEnumPins** ppEnum) override {
         if (!ppEnum) return E_POINTER;
         *ppEnum = new SinglePinEnumerator(&pin_);
@@ -325,13 +382,13 @@ public:
 
     STDMETHODIMP JoinFilterGraph(IFilterGraph* pGraph, LPCWSTR) override {
         std::lock_guard<std::mutex> lk(state_mtx_);
-        graph_ = pGraph;  // Weak reference per DirectShow rules
+        graph_ = pGraph;
         return S_OK;
     }
 
     STDMETHODIMP QueryVendorInfo(LPWSTR* pVendorInfo) override {
         if (!pVendorInfo) return E_POINTER;
-        const wchar_t* v = L"iOS USB Universal Capture Card";
+        const wchar_t* v = L"iOS USB 2K+ Adaptive Capture Card";
         size_t bytes = (wcslen(v) + 1) * sizeof(wchar_t);
         *pVendorInfo = static_cast<LPWSTR>(CoTaskMemAlloc(bytes));
         if (!*pVendorInfo) return E_OUTOFMEMORY;
@@ -339,7 +396,6 @@ public:
         return S_OK;
     }
 
-    // IAMFilterMiscFlags
     STDMETHODIMP_(ULONG) GetMiscFlags() override {
         return AM_FILTER_MISC_FLAGS_IS_SOURCE;
     }
@@ -367,20 +423,23 @@ private:
 };
 
 VideoOutputPin::VideoOutputPin(VideoCaptureFilter* parent) : filter_(parent) {
-    for (const auto& spec : kSupportedVideoModes) {
-        AM_MEDIA_TYPE mt{};
-        BuildVideoMediaType(spec, mt);
-        supported_mts_.push_back(mt);
-    }
-    BuildVideoMediaType(active_spec_, current_mt_);
+    RefreshDynamicPreferredSpecLocked();
 }
 
 VideoOutputPin::~VideoOutputPin() {
     Disconnect();
     FreeMediaTypeFormat(current_mt_);
-    for (auto& mt : supported_mts_) {
-        FreeMediaTypeFormat(mt);
+}
+
+void VideoOutputPin::RefreshDynamicPreferredSpecLocked() {
+    if (connected_pin_ || user_explicit_format_) {
+        return;
     }
+    uint32_t dyn_w = 2560U, dyn_h = 1440U;
+    QueryPreferredNativeDimensions(dyn_w, dyn_h);
+    active_spec_ = {dyn_w, dyn_h, 60, PixelSubtype::NV12};
+    FreeMediaTypeFormat(current_mt_);
+    BuildVideoMediaType(active_spec_, current_mt_);
 }
 
 STDMETHODIMP VideoOutputPin::QueryInterface(REFIID riid, void** ppv) {
@@ -447,6 +506,8 @@ STDMETHODIMP VideoOutputPin::Connect(IPin* pReceivePin, const AM_MEDIA_TYPE* pmt
     std::lock_guard<std::mutex> lk(pin_mtx_);
     if (connected_pin_) return VFW_E_ALREADY_CONNECTED;
 
+    RefreshDynamicPreferredSpecLocked();
+
     IMemInputPin* mem_in = nullptr;
     if (FAILED(pReceivePin->QueryInterface(IID_IMemInputPin, reinterpret_cast<void**>(&mem_in))) || !mem_in) {
         return VFW_E_NO_TRANSPORT;
@@ -470,33 +531,28 @@ STDMETHODIMP VideoOutputPin::Connect(IPin* pReceivePin, const AM_MEDIA_TYPE* pmt
         return true;
     };
 
+    auto modes = BuildAvailableModesList();
+    auto try_all_modes = [&]() -> bool {
+        if (try_connect_mt(current_mt_)) return true;
+        for (const auto& m : modes) {
+            AM_MEDIA_TYPE tmp{};
+            BuildVideoMediaType(m, tmp);
+            bool ok = try_connect_mt(tmp);
+            FreeMediaTypeFormat(tmp);
+            if (ok) return true;
+        }
+        return false;
+    };
+
     bool connected = false;
     if (pmt && !IsEqualGUID(pmt->majortype, GUID_NULL)) {
         if (IsEqualGUID(pmt->subtype, GUID_NULL) || pmt->pbFormat == nullptr) {
-            if (try_connect_mt(current_mt_)) {
-                connected = true;
-            } else {
-                for (const auto& m : supported_mts_) {
-                    if (try_connect_mt(m)) {
-                        connected = true;
-                        break;
-                    }
-                }
-            }
+            connected = try_all_modes();
         } else {
             connected = try_connect_mt(*pmt);
         }
     } else {
-        if (try_connect_mt(current_mt_)) {
-            connected = true;
-        } else {
-            for (const auto& m : supported_mts_) {
-                if (try_connect_mt(m)) {
-                    connected = true;
-                    break;
-                }
-            }
-        }
+        connected = try_all_modes();
     }
 
     if (!connected) {
@@ -511,7 +567,7 @@ STDMETHODIMP VideoOutputPin::Connect(IPin* pReceivePin, const AM_MEDIA_TYPE* pmt
 }
 
 STDMETHODIMP VideoOutputPin::ReceiveConnection(IPin*, const AM_MEDIA_TYPE*) {
-    return E_UNEXPECTED;  // Output pin
+    return E_UNEXPECTED;
 }
 
 STDMETHODIMP VideoOutputPin::Disconnect() {
@@ -529,6 +585,7 @@ STDMETHODIMP VideoOutputPin::Disconnect() {
     }
     connected_pin_->Release();
     connected_pin_ = nullptr;
+    user_explicit_format_ = false;
     return S_OK;
 }
 
@@ -582,13 +639,21 @@ STDMETHODIMP VideoOutputPin::QueryAccept(const AM_MEDIA_TYPE* pmt) {
 STDMETHODIMP VideoOutputPin::EnumMediaTypes(IEnumMediaTypes** ppEnum) {
     if (!ppEnum) return E_POINTER;
     std::lock_guard<std::mutex> lk(pin_mtx_);
+    RefreshDynamicPreferredSpecLocked();
+
+    auto modes = BuildAvailableModesList();
     std::vector<AM_MEDIA_TYPE> list;
-    list.reserve(1 + supported_mts_.size());
+    list.reserve(1 + modes.size());
     list.push_back(current_mt_);
-    for (const auto& mt : supported_mts_) {
+    for (const auto& m : modes) {
+        AM_MEDIA_TYPE mt{};
+        BuildVideoMediaType(m, mt);
         list.push_back(mt);
     }
     *ppEnum = new MediaTypeEnumerator(list);
+    for (size_t i = 1; i < list.size(); ++i) {
+        FreeMediaTypeFormat(list[i]);
+    }
     return S_OK;
 }
 
@@ -602,6 +667,7 @@ STDMETHODIMP VideoOutputPin::SetFormat(AM_MEDIA_TYPE* pmt) {
     if (!ExtractVideoSpecFromMediaType(pmt, spec)) {
         return VFW_E_INVALIDMEDIATYPE;
     }
+    user_explicit_format_ = true;
     active_spec_ = spec;
     FreeMediaTypeFormat(current_mt_);
     BuildVideoMediaType(active_spec_, current_mt_);
@@ -611,23 +677,26 @@ STDMETHODIMP VideoOutputPin::SetFormat(AM_MEDIA_TYPE* pmt) {
 STDMETHODIMP VideoOutputPin::GetFormat(AM_MEDIA_TYPE** ppmt) {
     if (!ppmt) return E_POINTER;
     std::lock_guard<std::mutex> lk(pin_mtx_);
+    RefreshDynamicPreferredSpecLocked();
     *ppmt = CloneMediaType(current_mt_);
     return *ppmt ? S_OK : E_OUTOFMEMORY;
 }
 
 STDMETHODIMP VideoOutputPin::GetNumberOfCapabilities(int* piCount, int* piSize) {
     if (!piCount || !piSize) return E_POINTER;
-    *piCount = static_cast<int>(std::size(kSupportedVideoModes));
+    auto modes = BuildAvailableModesList();
+    *piCount = static_cast<int>(modes.size());
     *piSize = sizeof(VIDEO_STREAM_CONFIG_CAPS);
     return S_OK;
 }
 
 STDMETHODIMP VideoOutputPin::GetStreamCaps(int iIndex, AM_MEDIA_TYPE** ppmt, BYTE* pSCC) {
     if (!ppmt || !pSCC) return E_POINTER;
-    if (iIndex < 0 || iIndex >= static_cast<int>(std::size(kSupportedVideoModes))) {
+    auto modes = BuildAvailableModesList();
+    if (iIndex < 0 || iIndex >= static_cast<int>(modes.size())) {
         return S_FALSE;
     }
-    const auto& spec = kSupportedVideoModes[iIndex];
+    const auto& spec = modes[static_cast<size_t>(iIndex)];
     AM_MEDIA_TYPE tmp{};
     BuildVideoMediaType(spec, tmp);
     *ppmt = CloneMediaType(tmp);
@@ -640,19 +709,19 @@ STDMETHODIMP VideoOutputPin::GetStreamCaps(int iIndex, AM_MEDIA_TYPE** ppmt, BYT
     caps->VideoStandard = AnalogVideo_None;
     caps->InputSize.cx = static_cast<LONG>(spec.width);
     caps->InputSize.cy = static_cast<LONG>(spec.height);
-    caps->MinCroppingSize = caps->InputSize;
-    caps->MaxCroppingSize = caps->InputSize;
-    caps->CropGranularityX = 2;
+    caps->MinCroppingSize = {160, 120};
+    caps->MaxCroppingSize = {static_cast<LONG>(kMaxFrameDimension), static_cast<LONG>(kMaxFrameDimension)};
+    caps->CropGranularityX = 4;
     caps->CropGranularityY = 2;
-    caps->MinOutputSize = caps->InputSize;
-    caps->MaxOutputSize = caps->InputSize;
-    caps->OutputGranularityX = 2;
+    caps->MinOutputSize = {160, 120};
+    caps->MaxOutputSize = {static_cast<LONG>(kMaxFrameDimension), static_cast<LONG>(kMaxFrameDimension)};
+    caps->OutputGranularityX = 4;
     caps->OutputGranularityY = 2;
     caps->MinFrameInterval = 10000000LL / 60LL;
     caps->MaxFrameInterval = 10000000LL / 15LL;
     size_t fb = CalcFrameByteSize(spec.width, spec.height, spec.pix);
-    caps->MinBitsPerSecond = static_cast<LONG>(fb * 8ULL * 15ULL);
-    caps->MaxBitsPerSecond = static_cast<LONG>(fb * 8ULL * 60ULL);
+    caps->MinBitsPerSecond = static_cast<LONG>(std::min<uint64_t>(fb * 8ULL * 15ULL, 0x7FFFFFFFULL));
+    caps->MaxBitsPerSecond = static_cast<LONG>(std::min<uint64_t>(fb * 8ULL * 60ULL, 0x7FFFFFFFULL));
     return S_OK;
 }
 
@@ -712,15 +781,13 @@ void VideoOutputPin::PushLoop() {
 
     const VideoModeSpec spec = active_spec_;
     const size_t out_bytes = CalcFrameByteSize(spec.width, spec.height, spec.pix);
+    const size_t target_nv12_bytes = static_cast<size_t>(spec.width) * spec.height * 3ULL / 2ULL;
     const REFERENCE_TIME frame_duration_hns = 10000000LL / static_cast<REFERENCE_TIME>(spec.fps);
     const auto frame_interval = std::chrono::nanoseconds(1000000000ULL / spec.fps);
 
     SharedCaptureConsumer shm_consumer;
-    std::vector<uint8_t> shm_1080p_nv12(kNv12FrameBytes, 16);
-    std::vector<uint8_t> scaled_nv12;
-    if (spec.width != kCanvasWidth || spec.height != kCanvasHeight) {
-        scaled_nv12.resize(static_cast<size_t>(spec.width) * spec.height * 3U / 2U);
-    }
+    std::vector<uint8_t> shm_raw_nv12(kMaxNv12FrameBytes, 16);
+    std::vector<uint8_t> fitted_nv12(target_nv12_bytes, 16);
 
     uint64_t frame_num = 0;
     auto next_deadline = std::chrono::steady_clock::now();
@@ -739,26 +806,24 @@ void VideoOutputPin::PushLoop() {
                 shm_consumer.Open(kDefaultShmName);
             }
 
+            uint32_t shm_w = 0, shm_h = 0;
             uint64_t seq = 0, pts_ns = 0;
-            bool got_live = shm_consumer.ReadLatestNV12Frame(shm_1080p_nv12.data(), seq, pts_ns);
+            bool got_live = shm_consumer.ReadLatestNV12Frame(
+                shm_raw_nv12.data(), shm_raw_nv12.size(), shm_w, shm_h, seq, pts_ns);
             const uint8_t* active_nv12 = nullptr;
 
-            if (got_live) {
-                if (spec.width == kCanvasWidth && spec.height == kCanvasHeight) {
-                    active_nv12 = shm_1080p_nv12.data();
+            if (got_live && shm_w > 0 && shm_h > 0) {
+                if (shm_w == spec.width && shm_h == spec.height) {
+                    // 1:1 native pixel-for-pixel zero-black-bar output!
+                    active_nv12 = shm_raw_nv12.data();
                 } else {
-                    ResizeNV12Fast(
-                        shm_1080p_nv12.data(), kCanvasWidth, kCanvasHeight,
-                        scaled_nv12.data(), spec.width, spec.height);
-                    active_nv12 = scaled_nv12.data();
+                    // Aspect-ratio preserving fit if downstream pin locked onto a different resolution or rotated mid-stream
+                    ResizeNV12Fast(shm_raw_nv12.data(), shm_w, shm_h, fitted_nv12.data(), spec.width, spec.height);
+                    active_nv12 = fitted_nv12.data();
                 }
             } else {
-                // Standby animated HD color bars when host daemon is offline
-                uint8_t* bar_buf = (spec.width == kCanvasWidth && spec.height == kCanvasHeight)
-                                       ? shm_1080p_nv12.data()
-                                       : scaled_nv12.data();
-                GenerateAnimatedColorBarsNV12(bar_buf, spec.width, spec.height, frame_num);
-                active_nv12 = bar_buf;
+                GenerateAnimatedColorBarsNV12(fitted_nv12.data(), spec.width, spec.height, frame_num);
+                active_nv12 = fitted_nv12.data();
             }
 
             if (spec.pix == PixelSubtype::NV12) {
@@ -784,7 +849,6 @@ void VideoOutputPin::PushLoop() {
 
         sample->Release();
         if (hr != S_OK && filter_->CurrentState() == State_Running) {
-            // Downstream stopped accepting samples
             if (FAILED(hr)) break;
         }
 
