@@ -16,11 +16,11 @@ BEGIN
     BEGIN
         BLOCK "040404b0"
         BEGIN
-            VALUE "CompanyName", "JCast Project"
-            VALUE "FileDescription", "JCast for iOS Core Engine"
+            VALUE "CompanyName", "TJCap Project"
+            VALUE "FileDescription", "TJCap for iOS Core Engine"
             VALUE "FileVersion", IOS_VCAM_VER_STR
-            VALUE "LegalCopyright", "Copyright (C) 2026 JCast Project"
-            VALUE "ProductName", "JCast for iOS"
+            VALUE "LegalCopyright", "Copyright (C) 2026 TJCap Project"
+            VALUE "ProductName", "TJCap for iOS"
             VALUE "ProductVersion", IOS_VCAM_VER_STR
         END
     END

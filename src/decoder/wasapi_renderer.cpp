@@ -272,7 +272,7 @@ void WasapiAudioRouter::WorkerLoop(std::string shm_name, std::wstring device_id)
                                  DiagCode::E501_AudioEndpointLost,
                                  DiagSeverity::Warning,
                                  "電腦端監聽音訊裝置 \"" + active_endpoint_name_ +
-                                     "\" 已中斷或拔除（OBS 內的 JCast for iOS (Audio) 仍正常運作）。")
+                                     "\" 已中斷或拔除（OBS 內的 TJCap for iOS (Audio) 仍正常運作）。")
                           << "\n";
             }
             break;

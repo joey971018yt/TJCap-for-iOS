@@ -19,7 +19,7 @@ std::filesystem::path GetDefaultScreenshotDirectory(const std::filesystem::path&
 #ifdef _WIN32
     PWSTR pictures_path = nullptr;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Pictures, 0, nullptr, &pictures_path)) && pictures_path) {
-        target_dir = std::filesystem::path(pictures_path) / L"JCast Screenshots";
+        target_dir = std::filesystem::path(pictures_path) / L"TJCap Screenshots";
         CoTaskMemFree(pictures_path);
     }
 #endif
@@ -42,7 +42,7 @@ std::filesystem::path BuildTimestampedScreenshotPath(
     std::swprintf(
         fname,
         128,
-        L"JCast_%04u%02u%02u_%02u%02u%02u_%03u_%ux%u.png",
+        L"TJCap_%04u%02u%02u_%02u%02u%02u_%03u_%ux%u.png",
         st.wYear,
         st.wMonth,
         st.wDay,
@@ -63,7 +63,7 @@ std::filesystem::path BuildTimestampedScreenshotPath(
     std::snprintf(
         fname,
         sizeof(fname),
-        "JCast_%04d%02d%02d_%02d%02d%02d_%03lld_%ux%u.png",
+        "TJCap_%04d%02d%02d_%02d%02d%02d_%03lld_%ux%u.png",
         tm_val.tm_year + 1900,
         tm_val.tm_mon + 1,
         tm_val.tm_mday,

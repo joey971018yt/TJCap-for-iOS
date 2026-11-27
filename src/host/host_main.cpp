@@ -68,7 +68,7 @@ struct HostOptions {
 
 void PrintUsage() {
     std::cout
-        << "JCast for iOS — Core Capture Host (ios_vcam_host.exe)\n"
+        << "TJCap for iOS — Core Capture Host (ios_vcam_host.exe)\n"
         << "Usage: ios_vcam_host.exe [options]\n\n"
         << "Options:\n"
         << "  --res <mode>           Resolution & aspect mode (default: native):\n"
@@ -150,7 +150,7 @@ int RunMockPipeline(SharedCaptureProducer& producer, const HostOptions& opts) {
 
     std::cout << "[Host] Starting --mock self-test generator (" << mock_w << "x" << mock_h
               << "@60fps NV12 + 48kHz Stereo LPCM)...\n"
-              << "[Host] Open OBS / Discord / Zoom and select 'JCast for iOS (Video)'!\n"
+              << "[Host] Open OBS / Discord / Zoom and select 'TJCap for iOS (Video)'!\n"
               << "[Host] Press Ctrl+C to stop.\n";
 
     constexpr uint64_t kFrameIntervalNs = 16666667ULL;  // 60.00 fps
@@ -310,7 +310,7 @@ int main(int argc, char** argv) {
         } else if (!opts.audio_out_match.empty()) {
             std::cerr << "[Audio] Warning: No playback endpoint matched \"" << opts.audio_out_match << "\".\n";
         } else {
-            std::cout << "[Audio] DirectShow 'JCast for iOS (Audio)' active (48kHz LPCM).\n";
+            std::cout << "[Audio] DirectShow 'TJCap for iOS (Audio)' active (48kHz LPCM).\n";
         }
     }
 

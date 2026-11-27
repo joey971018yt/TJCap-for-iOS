@@ -26,10 +26,10 @@ AppLanguagePref ParseLanguagePrefValue(std::string_view value);
 AppLanguage ResolveEffectiveLanguage(AppLanguagePref pref, uint16_t windows_lang_id);
 
 #ifdef _WIN32
-// Loads saved language preference from HKCU\Software\JCastForiOS (returns Auto if not set)
+// Loads saved language preference from HKCU\Software\TJCapForiOS (falls back to legacy JCastForiOS if unset)
 AppLanguagePref LoadSavedLanguagePref();
 
-// Saves language preference to HKCU\Software\JCastForiOS (no UAC elevation required)
+// Saves language preference to HKCU\Software\TJCapForiOS (no UAC elevation required)
 bool SaveLanguagePref(AppLanguagePref pref);
 
 // Detects effective language from current Windows user UI language

@@ -50,7 +50,7 @@ enum class DiagCode : uint16_t {
 struct DiagCodeSpec {
     DiagCode code = DiagCode::None;
     DiagSeverity default_severity = DiagSeverity::Error;
-    const char* code_str = "JCAST-E000";
+    const char* code_str = "TJCAP-E000";
     const char* title_utf8 = "";
     const char* cause_utf8 = "";
     const char* fix_steps_utf8 = "";
@@ -66,16 +66,16 @@ struct ParsedDiagEvent {
 // Looks up localized (Traditional Chinese / English) root-cause & step-by-step fix specification for any DiagCode
 const DiagCodeSpec& LookupDiagSpec(DiagCode code, AppLanguage lang = AppLanguage::ZhTW);
 
-// Parses numeric code string such as "E301" or "JCAST-E301" into DiagCode
+// Parses numeric code string such as "E301", "TJCAP-E301", or legacy "JCAST-E301" into DiagCode
 DiagCode ParseDiagCodeToken(std::string_view token);
 
 // Classifies raw libusb / transport error messages into a structured DiagCode
 DiagCode ClassifyUsbOrTransportError(std::string_view raw_err);
 
-// Formats a structured host diagnostic stdout line: "[JCAST-DIAG|E301|WARN] <detail>"
+// Formats a structured host diagnostic stdout line: "[TJCAP-DIAG|E301|WARN] <detail>"
 std::string FormatHostDiagLine(DiagCode code, DiagSeverity sev, std::string_view detail_utf8);
 
-// Parses a line emitted by FormatHostDiagLine (returns true if line starts with "[JCAST-DIAG|")
+// Parses a line emitted by FormatHostDiagLine (accepts "[TJCAP-DIAG|" and legacy "[JCAST-DIAG|")
 bool ParseHostDiagLine(std::string_view line_utf8, ParsedDiagEvent& out_event);
 
 // Translates a Windows process exit code (e.g. 0xC0000005, 0xC0000135) into a localized explanation

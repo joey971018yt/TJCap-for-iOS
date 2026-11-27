@@ -333,10 +333,10 @@ bool TestGitHubReleasesJsonAndSemVerUpdater() {
 
     // 2. Realistic GitHub REST API /releases/latest JSON with nested author/uploader html_url, emoji surrogates, and sha256 digest
     const char* sample_github_json = R"JSON({
-      "url": "https://api.github.com/repos/joey971018yt/iOS-usb-cam/releases/123456",
-      "html_url": "https://github.com/joey971018yt/iOS-usb-cam/releases/tag/v1.6.0",
-      "tag_name": "v1.6.0",
-      "name": "JCast for iOS v1.6.0 \uD83D\uDE80",
+      "url": "https://api.github.com/repos/joey971018yt/TJCap-for-iOS/releases/123456",
+      "html_url": "https://github.com/joey971018yt/TJCap-for-iOS/releases/tag/v2.0.0",
+      "tag_name": "v2.0.0",
+      "name": "TJCap for iOS v2.0.0 \uD83D\uDE80",
       "draft": false,
       "prerelease": false,
       "published_at": "2026-11-27T02:00:00Z",
@@ -347,17 +347,17 @@ bool TestGitHubReleasesJsonAndSemVerUpdater() {
       "body": "## What's New\r\n- Fast WinHTTP updater\n- SHA-256 verification",
       "assets": [
         {
-          "name": "JCast-for-iOS-Portable-v1.6.0.zip",
+          "name": "TJCap-for-iOS-Portable-v2.0.0.zip",
           "size": 1480000,
           "digest": "sha256:73e2b1258f14c2c9ccfae1b544ea0fd7412ef7060ca1c6ed5bed4b095eac48ec",
-          "browser_download_url": "https://github.com/joey971018yt/iOS-usb-cam/releases/download/v1.6.0/JCast-for-iOS-Portable-v1.6.0.zip",
+          "browser_download_url": "https://github.com/joey971018yt/TJCap-for-iOS/releases/download/v2.0.0/TJCap-for-iOS-Portable-v2.0.0.zip",
           "uploader": { "html_url": "https://github.com/actions-user" }
         },
         {
-          "name": "JCast-for-iOS-Setup-v1.6.0.exe",
+          "name": "TJCap-for-iOS-Setup-v2.0.0.exe",
           "size": 2850000,
           "digest": "SHA256:4321E761BB1FFE42930028BD96AFEA0067A089D22DE0A7DB04FB76F4F7F51F99",
-          "browser_download_url": "https://github.com/joey971018yt/iOS-usb-cam/releases/download/v1.6.0/JCast-for-iOS-Setup-v1.6.0.exe"
+          "browser_download_url": "https://github.com/joey971018yt/TJCap-for-iOS/releases/download/v2.0.0/TJCap-for-iOS-Setup-v2.0.0.exe"
         }
       ]
     })JSON";
@@ -366,21 +366,21 @@ bool TestGitHubReleasesJsonAndSemVerUpdater() {
     std::string err;
     ASSERT_TRUE(ParseGitHubReleaseJson(sample_github_json, info, &err),
                 ("Failed to parse GitHub release JSON: " + err).c_str());
-    ASSERT_TRUE(info.tag_name == "v1.6.0", "Parsed tag_name mismatch");
-    ASSERT_TRUE(info.html_url == "https://github.com/joey971018yt/iOS-usb-cam/releases/tag/v1.6.0",
+    ASSERT_TRUE(info.tag_name == "v2.0.0", "Parsed tag_name mismatch");
+    ASSERT_TRUE(info.html_url == "https://github.com/joey971018yt/TJCap-for-iOS/releases/tag/v2.0.0",
                 "Top-level html_url must not collide with nested author.html_url");
     ASSERT_TRUE(info.title.find("\xF0\x9F\x9A\x80") != std::string::npos,
                 "UTF-16 surrogate pair \\uD83D\\uDE80 should decode to UTF-8 rocket emoji");
     ASSERT_TRUE(!info.draft && !info.prerelease, "Draft/prerelease flags should be false");
     ASSERT_TRUE(info.assets.size() == 2, "Expected 2 parsed release assets");
-    ASSERT_TRUE(info.setup_exe.name == "JCast-for-iOS-Setup-v1.6.0.exe" && info.setup_exe.size_bytes == 2850000ULL,
+    ASSERT_TRUE(info.setup_exe.name == "TJCap-for-iOS-Setup-v2.0.0.exe" && info.setup_exe.size_bytes == 2850000ULL,
                 "Setup.exe asset selection mismatch");
     ASSERT_TRUE(info.setup_exe.sha256_hex == "4321e761bb1ffe42930028bd96afea0067a089d22de0a7db04fb76f4f7f51f99",
                 "Expected normalized lowercase 64-char SHA-256 hex for Setup.exe");
-    ASSERT_TRUE(info.portable_zip.name == "JCast-for-iOS-Portable-v1.6.0.zip" &&
+    ASSERT_TRUE(info.portable_zip.name == "TJCap-for-iOS-Portable-v2.0.0.zip" &&
                     info.portable_zip.size_bytes == 1480000ULL,
                 "Portable.zip asset selection mismatch");
-    ASSERT_TRUE(IsRemoteVersionNewer("1.5.0", info.tag_name), "v1.6.0 should be detected as newer than 1.5.0");
+    ASSERT_TRUE(IsRemoteVersionNewer("1.9.0", info.tag_name), "v2.0.0 should be detected as newer than 1.9.0");
 
     return true;
 }
@@ -469,10 +469,10 @@ bool TestPreviewDownscaleAndFullResScreenshotPipeline() {
                 "Top-left 75% broadcast white bar pixel in full-res screenshot should be ~191 with A=255");
 
     // Verify timestamped screenshot filename convention
-    std::filesystem::path tmp_dir = std::filesystem::temp_directory_path() / ("jcast_shot_test_" + std::to_string(pid));
+    std::filesystem::path tmp_dir = std::filesystem::temp_directory_path() / ("tjcap_shot_test_" + std::to_string(pid));
     std::filesystem::path shot_path = BuildTimestampedScreenshotPath(tmp_dir, shot_w, shot_h);
     std::string fname_u8 = shot_path.filename().string();
-    ASSERT_TRUE(fname_u8.find("JCast_") == 0 && fname_u8.find("_2868x1320.png") != std::string::npos,
+    ASSERT_TRUE(fname_u8.find("TJCap_") == 0 && fname_u8.find("_2868x1320.png") != std::string::npos,
                 "BuildTimestampedScreenshotPath filename format mismatch");
 
 #ifdef _WIN32
@@ -623,13 +623,16 @@ bool TestFaultDiagnosticsAndRedaction() {
     for (DiagCode dc : kAllCodes) {
         const auto& sp = LookupDiagSpec(dc);
         ASSERT_TRUE(sp.code == dc, "LookupDiagSpec code mismatch");
-        ASSERT_TRUE(std::strncmp(sp.code_str, "JCAST-E", 7) == 0, "DiagCodeSpec code_str prefix mismatch");
+        ASSERT_TRUE(std::strncmp(sp.code_str, "TJCAP-E", 7) == 0, "DiagCodeSpec code_str prefix mismatch");
         ASSERT_TRUE(std::strlen(sp.title_utf8) > 6 && std::strlen(sp.cause_utf8) > 10 &&
                         std::strlen(sp.fix_steps_utf8) > 10,
                     "DiagCodeSpec must have non-empty Chinese title, cause, and fix steps");
-        ASSERT_TRUE(ParseDiagCodeToken(sp.code_str) == dc, "ParseDiagCodeToken full JCAST-Exxx failed");
+        ASSERT_TRUE(ParseDiagCodeToken(sp.code_str) == dc, "ParseDiagCodeToken full TJCAP-Exxx failed");
         ASSERT_TRUE(ParseDiagCodeToken(sp.code_str + 6) == dc, "ParseDiagCodeToken short Exxx failed");
     }
+    // Backward compatibility: legacy JCAST- token prefix still parses cleanly
+    ASSERT_TRUE(ParseDiagCodeToken("JCAST-E301") == DiagCode::E301_IosNotTrustedOrLocked,
+                "ParseDiagCodeToken must stay backward-compatible with legacy JCAST-Exxx");
 
     // 2. Verify FormatHostDiagLine -> ParseHostDiagLine structured IPC stdout roundtrip
     {
@@ -637,7 +640,7 @@ bool TestFaultDiagnosticsAndRedaction() {
             DiagCode::E402_GpuFallbackToSoftware,
             DiagSeverity::Warning,
             "D3D11VA TDR reset detected; switched seamlessly to CPU software decoder");
-        ASSERT_TRUE(line.rfind("[JCAST-DIAG|E402|WARN] ", 0) == 0, "FormatHostDiagLine header mismatch");
+        ASSERT_TRUE(line.rfind("[TJCAP-DIAG|E402|WARN] ", 0) == 0, "FormatHostDiagLine header mismatch");
         ParsedDiagEvent ev{};
         ASSERT_TRUE(ParseHostDiagLine(line, ev), "ParseHostDiagLine failed on valid line");
         ASSERT_TRUE(ev.code == DiagCode::E402_GpuFallbackToSoftware &&
@@ -645,9 +648,15 @@ bool TestFaultDiagnosticsAndRedaction() {
                         ev.detail_utf8.find("D3D11VA TDR reset") != std::string::npos,
                     "ParsedDiagEvent roundtrip fields mismatch");
 
+        ParsedDiagEvent legacy_ev{};
+        ASSERT_TRUE(ParseHostDiagLine("[JCAST-DIAG|E301|WARN] legacy host line", legacy_ev) &&
+                        legacy_ev.code == DiagCode::E301_IosNotTrustedOrLocked &&
+                        legacy_ev.severity == DiagSeverity::Warning,
+                    "ParseHostDiagLine must stay backward-compatible with legacy [JCAST-DIAG|...]");
+
         ParsedDiagEvent normal_ev{};
         ASSERT_TRUE(!ParseHostDiagLine("[Host] Connected: Product=0x12A8", normal_ev),
-                    "Normal host log line must NOT parse as [JCAST-DIAG|...]");
+                    "Normal host log line must NOT parse as [TJCAP-DIAG|...]");
     }
 
     // 3. Verify ClassifyUsbOrTransportError accurately maps libusb / transport errors
@@ -684,7 +693,7 @@ bool TestFaultDiagnosticsAndRedaction() {
 
     // 5. Verify privacy-safe redaction scrubs Windows user folder names & modern/classic Apple UDIDs
     std::string sensitive =
-        "Path: C:\\Users\\JoeyChen\\Pictures\\JCast Screenshots\\shot.png\n"
+        "Path: C:\\Users\\JoeyChen\\Pictures\\TJCap Screenshots\\shot.png\n"
         "PublicPath: C:\\Users\\Public\\Documents\\ok.txt\n"
         "[Host] Connected: Product=0x12A8 Serial=00008130-001A2B3C4D5E6F70 LinkSpeed=USB 3.0\n"
         "RawUDID1: 00008120-0099AABBCCDDEEFF and LegacyUDID: 41f2a9c088b1234567890abcdef1234567890abc\n";
@@ -705,14 +714,14 @@ bool TestFaultDiagnosticsAndRedaction() {
     // 6. Verify GitHub New Issue URL builder produces safe HTTPS GitHub URL with encoded summary
     std::string gh_url = BuildGitHubNewIssueUrl(
         "joey971018yt",
-        "iOS-usb-cam",
-        "1.9.0",
+        "TJCap-for-iOS",
+        "2.0.0",
         DiagCode::E301_IosNotTrustedOrLocked,
         "User C:\\Users\\Alice\\Desktop Serial=00008130-0011223344556677");
     ASSERT_TRUE(
-        gh_url.rfind("https://github.com/joey971018yt/iOS-usb-cam/issues/new?title=", 0) == 0,
+        gh_url.rfind("https://github.com/joey971018yt/TJCap-for-iOS/issues/new?title=", 0) == 0,
         "BuildGitHubNewIssueUrl prefix mismatch");
-    ASSERT_TRUE(gh_url.find("JCAST-E301") != std::string::npos &&
+    ASSERT_TRUE(gh_url.find("TJCAP-E301") != std::string::npos &&
                     gh_url.find("Alice") == std::string::npos &&
                     gh_url.find("0011223344556677") == std::string::npos,
                 "BuildGitHubNewIssueUrl must include error code and redact sensitive summary fields");
@@ -798,13 +807,13 @@ bool TestLanguageSettingsAndEnglishLocalization() {
                 "English exit code description mismatch");
     std::string issue_en = BuildGitHubNewIssueUrl(
         "joey971018yt",
-        "iOS-usb-cam",
-        "1.9.0",
+        "TJCap-for-iOS",
+        "2.0.0",
         DiagCode::E201_ZadigDriverConflict,
         "Conflict",
         AppLanguage::EnUS);
     ASSERT_TRUE(issue_en.find("Bug%20Report") != std::string::npos &&
-                    issue_en.find("JCAST-E201") != std::string::npos,
+                    issue_en.find("TJCAP-E201") != std::string::npos,
                 "English GitHub Issue URL must use English title & error code");
 
     return true;
@@ -813,7 +822,7 @@ bool TestLanguageSettingsAndEnglishLocalization() {
 }  // namespace
 
 int main() {
-    std::cout << "[JCast for iOS] Running protocol, USB speed, updater, preview, screenshot, telemetry, diagnostics & language tests...\n";
+    std::cout << "[TJCap for iOS] Running protocol, USB speed, updater, preview, screenshot, telemetry, diagnostics & language tests...\n";
     if (!TestExactQuickTimeHexVectors()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestExactQuickTimeHexVectors\n";
     if (!TestSpsResolutionAndAvccConversion()) return EXIT_FAILURE;
@@ -834,6 +843,6 @@ int main() {
     std::cout << "  [PASS] TestFaultDiagnosticsAndRedaction\n";
     if (!TestLanguageSettingsAndEnglishLocalization()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestLanguageSettingsAndEnglishLocalization\n";
-    std::cout << "[JCast for iOS] All tests passed successfully!\n";
+    std::cout << "[TJCap for iOS] All tests passed successfully!\n";
     return EXIT_SUCCESS;
 }

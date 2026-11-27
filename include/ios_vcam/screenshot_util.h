@@ -6,10 +6,10 @@
 
 namespace ios_vcam {
 
-// Resolves "%USERPROFILE%\Pictures\JCast Screenshots" (creates directory if needed), falling back to app_dir\Screenshots
+// Resolves "%USERPROFILE%\Pictures\TJCap Screenshots" (creates directory if needed), falling back to app_dir\Screenshots
 std::filesystem::path GetDefaultScreenshotDirectory(const std::filesystem::path& fallback_app_dir);
 
-// Builds a collision-free millisecond-timestamped PNG filename, e.g. "JCast_20261126_232015_128_2868x1320.png"
+// Builds a collision-free millisecond-timestamped PNG filename, e.g. "TJCap_20261126_232015_128_2868x1320.png"
 std::filesystem::path BuildTimestampedScreenshotPath(
     const std::filesystem::path& dir,
     uint32_t width,

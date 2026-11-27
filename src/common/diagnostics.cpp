@@ -13,7 +13,7 @@ namespace {
 const DiagCodeSpec kNoneSpec{
     DiagCode::None,
     DiagSeverity::Info,
-    "JCAST-OK",
+    "TJCAP-OK",
     "系統運作正常",
     "目前未偵測到任何硬體、驅動或串流異常。",
     "無需額外操作。",
@@ -24,17 +24,17 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E101_MissingCoreFiles,
         DiagSeverity::Critical,
-        "JCAST-E101",
+        "TJCAP-E101",
         "缺少核心執行檔或驅動元件",
         "程式資料夾內遺失必要元件（如 ios_vcam_host.exe、ios_vcam_dshow.dll、libusb-1.0.dll 或 drivers\\libusb0.sys），常見於未完整解壓縮 Portable.zip 或遭防毒軟體誤隔離。",
         "1. 請確認已將整個 ZIP 壓縮包「完整解壓縮」至同一資料夾（勿直接在壓縮檔內雙擊執行）。\n"
-        "2. 若防毒軟體攔截，請將 JCast for iOS 資料夾加入信任排除清單，或改下載 Setup.exe 正式安裝版重新安裝。",
+        "2. 若防毒軟體攔截，請將 TJCap for iOS 資料夾加入信任排除清單，或改下載 Setup.exe 正式安裝版重新安裝。",
         false,
     },
     {
         DiagCode::E102_MissingAppleService,
         DiagSeverity::Warning,
-        "JCAST-E102",
+        "TJCAP-E102",
         "未偵測到 Apple 行動裝置配對服務 (AMDS / Apple USB Driver)",
         "電腦尚未安裝 Apple 原廠 USB 驅動與信任配對服務，iPhone / iPad 插上電腦後將無法跳出「信任這部電腦」提示。",
         "1. 請開啟 Microsoft Store 搜尋並安裝官方免費的「Apple 裝置 (Apple Devices)」或「iTunes」。\n"
@@ -44,7 +44,7 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E103_MissingMediaFoundation,
         DiagSeverity::Critical,
-        "JCAST-E103",
+        "TJCAP-E103",
         "系統缺少 Windows Media Foundation H.264 視訊解碼元件",
         "找不到 mfplat.dll 或 msmpeg2vdec.dll，常見於 Windows 10 / 11 N 或 KN 歐洲精簡版系統未安裝媒體功能套件。",
         "1. 開啟 Windows「設定 ➔ 系統 ➔ 選用功能 (Optional Features) ➔ 新增選用功能」。\n"
@@ -54,17 +54,17 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E104_DshowNotRegistered,
         DiagSeverity::Warning,
-        "JCAST-E104",
+        "TJCAP-E104",
         "DirectShow 虛擬擷取卡尚未註冊或路徑已變更",
         "尚未完成首次虛擬鏡頭註冊，或解壓縮資料夾在註冊後曾被搬移至其他路徑。",
         "1. 點擊主視窗或本診斷視窗中的「🔧 安裝／修復驅動」按鈕，自動以系統管理員權限重新指向目前路徑。\n"
-        "2. 若 OBS Studio 已開啟，修復後重新啟動 OBS 即可抓到 JCast for iOS (Video) / (Audio)。",
+        "2. 若 OBS Studio 已開啟，修復後重新啟動 OBS 即可抓到 TJCap for iOS (Video) / (Audio)。",
         true,
     },
     {
         DiagCode::E201_ZadigDriverConflict,
         DiagSeverity::Critical,
-        "JCAST-E201",
+        "TJCAP-E201",
         "偵測到 iPhone 父複合裝置驅動遭 Zadig (WinUSB / libusbK) 覆蓋",
         "曾使用 Zadig 等工具將 Apple Mobile Device USB Composite Device 原廠驅動強制替換，導致手機失去原廠配對與 QuickTime 多組態切換能力。",
         "1. 開啟 Windows「裝置管理員」➔ 找到該 Apple / WinUSB 裝置 ➔ 右鍵「解除安裝裝置」，勾選「嘗試移除此裝置的驅動程式」。\n"
@@ -74,7 +74,7 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E202_UpperFilterMissing,
         DiagSeverity::Warning,
-        "JCAST-E202",
+        "TJCAP-E202",
         "此 iPhone / iPad 尚未掛載 libusb0 安全過濾層",
         "首次插入此台 iOS 裝置或更換不同型號手機時，尚未在該裝置節點寫入 UpperFilters=libusb0。",
         "1. 保持手機連接在電腦上，點擊「🔧 安裝／修復驅動」（或直接點「🚀 智慧一鍵啟動」）自動完成無損掛載。\n"
@@ -84,7 +84,7 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E203_UsbOpenAccessDenied,
         DiagSeverity::Error,
-        "JCAST-E203",
+        "TJCAP-E203",
         "開啟 iOS USB 裝置遭拒 (LIBUSB_ERROR_ACCESS)",
         "已偵測到 Apple 裝置，但 Windows 拒絕開啟低階 USB 控制代碼；通常為剛安裝完過濾驅動尚未重新插拔，或權限受限。",
         "1. 請將手機端的 USB 傳輸線拔下，等待 2 秒後重新插回電腦。\n"
@@ -94,7 +94,7 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E204_UsbInterfaceBusy,
         DiagSeverity::Error,
-        "JCAST-E204",
+        "TJCAP-E204",
         "iOS QuickTime 影音通道正被其他程式佔用 (LIBUSB_ERROR_BUSY)",
         "背景已有另一個投屏工具、macOS/Windows 虛擬機或殘留的 ios_vcam_host.exe 鎖定了 SubClass 0x2A 介面。",
         "1. 請關閉其他手機有線投屏軟體或第三方手機助手。\n"
@@ -104,7 +104,7 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E301_IosNotTrustedOrLocked,
         DiagSeverity::Warning,
-        "JCAST-E301",
+        "TJCAP-E301",
         "尚未取得手機信任授權或無法切換 QuickTime 影音模式",
         "已送出 QuickTime 隱藏組態啟用指令，但手機未開啟 SubClass 0x2A 影音介面；最常見原因為手機處於鎖屏狀態、尚未點擊「信任這部電腦」，或使用了僅供充電的線材。",
         "1. 請解鎖 iPhone / iPad 保持螢幕亮起，若跳出「要信任這部電腦嗎？」請點選「信任」並輸入鎖屏密碼。\n"
@@ -114,7 +114,7 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E302_SetConfigFailed,
         DiagSeverity::Error,
-        "JCAST-E302",
+        "TJCAP-E302",
         "切換 USB QuickTime 組態失敗 (libusb_set_configuration)",
         "切換至高頻寬影音組態時遭匯流排拒絕，常見於過濾驅動未完整生效或外接 USB Hub 供電不足。",
         "1. 點擊「🔧 安裝／修復驅動」重新確認 UpperFilter 狀態。\n"
@@ -124,7 +124,7 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E303_HandshakeNoFrames,
         DiagSeverity::Warning,
-        "JCAST-E303",
+        "TJCAP-E303",
         "USB 影音通道已建立但逾時未收到畫面封包",
         "已成功宣稱 QuickTime 介面並送出音視訊同步握手，但超過 8 秒未收到任何 H.264 影格；通常因手機在握手瞬間鎖屏或 iOS 媒體服務暫時卡住。",
         "1. 請將 iPhone / iPad 解鎖並滑動一下螢幕。\n"
@@ -134,7 +134,7 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E304_UsbTransferIoDrop,
         DiagSeverity::Error,
-        "JCAST-E304",
+        "TJCAP-E304",
         "USB 傳輸途中發生 I/O 中斷或頻寬溢位",
         "串流期間收到 LIBUSB_ERROR_IO / PIPE / OVERFLOW / NO_DEVICE；除正常拔線外，多因線材接觸不良、機殼前置 USB 孔壓降過大，或老舊 USB 孔跑超高碼率所致。",
         "1. 檢查 Lightning / USB-C 接頭是否鬆動，並優先改插「主機板後方原生 USB 接口」。\n"
@@ -144,7 +144,7 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E401_DecoderInitFailed,
         DiagSeverity::Critical,
-        "JCAST-E401",
+        "TJCAP-E401",
         "H.264 視訊解碼器初始化失敗",
         "顯示卡 D3D11VA 硬體解碼與系統軟體解碼器皆無法建立，可能因顯示卡驅動異常或缺少系統解碼器。",
         "1. 請嘗試取消勾選主視窗的「啟用 GPU 硬體超低延遲解碼 (D3D11VA)」改用 CPU 軟解測試。\n"
@@ -154,7 +154,7 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E402_GpuFallbackToSoftware,
         DiagSeverity::Warning,
-        "JCAST-E402",
+        "TJCAP-E402",
         "GPU 硬體解碼異常，已自動無縫降級為 CPU 軟體解碼",
         "顯示卡 D3D11VA 發生驅動重置 (TDR) 或不支援目前畫面組態；系統已自動切換至 CPU 軟體解碼以確保直播不中斷。",
         "1. 目前串流已自動恢復運作，您可繼續使用。\n"
@@ -164,7 +164,7 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E403_HighDecodeLatency,
         DiagSeverity::Warning,
-        "JCAST-E403",
+        "TJCAP-E403",
         "解碼管線延遲偏高（超過 60fps 16.7ms 預算）",
         "單張影格解碼與縮放耗時過長，可能導致 60fps 直播掉幀；常見於未開啟 D3D11VA 硬體解碼卻執行 2K+ 超高解析度。",
         "1. 請確認已勾選「啟用 GPU 硬體超低延遲解碼 (D3D11VA)」。\n"
@@ -174,9 +174,9 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E501_AudioEndpointLost,
         DiagSeverity::Warning,
-        "JCAST-E501",
+        "TJCAP-E501",
         "電腦端音訊監聽裝置已斷開或失效",
-        "直播途中拔除了耳機／USB 音效卡或藍牙音訊中斷 (AUDCLNT_E_DEVICE_INVALIDATED)。註：OBS 內的「JCast for iOS (Audio)」不受影響仍正常收音！",
+        "直播途中拔除了耳機／USB 音效卡或藍牙音訊中斷 (AUDCLNT_E_DEVICE_INVALIDATED)。註：OBS 內的「TJCap for iOS (Audio)」不受影響仍正常收音！",
         "1. 若僅需 OBS 直播收音，可忽略此提示，OBS 音軌完全正常。\n"
         "2. 若需恢復電腦耳機同步監聽，請重新接上耳機後停止並重新啟動一次投影。",
         false,
@@ -184,17 +184,17 @@ const DiagCodeSpec kSpecs[] = {
     {
         DiagCode::E502_SharedMemInitFailed,
         DiagSeverity::Critical,
-        "JCAST-E502",
+        "TJCAP-E502",
         "無法建立跨行程高畫質共享記憶體 (IosUsbVcamSharedMemV2)",
         "系統可用虛擬記憶體（分頁檔 Commit Charge）不足，或遭舊版高權限行程鎖定同名區段。",
         "1. 關閉佔用大量記憶體的閒置程式，確認 Windows 虛擬記憶體（分頁檔）未被手動停用。\n"
-        "2. 重新啟動 JCast for iOS 與 OBS Studio。",
+        "2. 重新啟動 TJCap for iOS 與 OBS Studio。",
         false,
     },
     {
         DiagCode::E503_HostUnexpectedExit,
         DiagSeverity::Critical,
-        "JCAST-E503",
+        "TJCAP-E503",
         "背景擷取核心程序 (ios_vcam_host.exe) 異常終止",
         "擷取引擎在非使用者手動停止的情況下提前結束並回傳非零錯誤碼。",
         "1. 請檢視下方「程序結束代碼說明」與近期錯誤紀錄。\n"
@@ -206,7 +206,7 @@ const DiagCodeSpec kSpecs[] = {
 const DiagCodeSpec kNoneSpecEn{
     DiagCode::None,
     DiagSeverity::Info,
-    "JCAST-OK",
+    "TJCAP-OK",
     "System Operating Normally",
     "No hardware, driver, or streaming faults have been detected.",
     "No action required.",
@@ -217,17 +217,17 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E101_MissingCoreFiles,
         DiagSeverity::Critical,
-        "JCAST-E101",
+        "TJCAP-E101",
         "Missing Core Executables or Driver Components",
         "Required files are missing from the app folder (e.g. ios_vcam_host.exe, ios_vcam_dshow.dll, libusb-1.0.dll, or drivers\\libusb0.sys), commonly caused by running directly inside a ZIP archive or antivirus quarantine.",
         "1. Extract the entire Portable ZIP archive into a normal folder before launching (do not run from inside the ZIP viewer).\n"
-        "2. If quarantined by antivirus software, allow the JCast for iOS folder or reinstall using the official Setup.exe installer.",
+        "2. If quarantined by antivirus software, allow the TJCap for iOS folder or reinstall using the official Setup.exe installer.",
         false,
     },
     {
         DiagCode::E102_MissingAppleService,
         DiagSeverity::Warning,
-        "JCAST-E102",
+        "TJCAP-E102",
         "Apple Mobile Device Pairing Service Not Detected",
         "Apple's official USB driver / pairing service is not installed, so iPhone / iPad cannot show the 'Trust This Computer' prompt.",
         "1. Open Microsoft Store and install the free official 'Apple Devices' app or 'iTunes'.\n"
@@ -237,7 +237,7 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E103_MissingMediaFoundation,
         DiagSeverity::Critical,
-        "JCAST-E103",
+        "TJCAP-E103",
         "Windows Media Foundation H.264 Decoder Missing",
         "mfplat.dll or msmpeg2vdec.dll was not found. This commonly occurs on Windows 10/11 N or KN editions without Media Feature Pack.",
         "1. Open Windows Settings -> System -> Optional Features -> Add an optional feature.\n"
@@ -247,17 +247,17 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E104_DshowNotRegistered,
         DiagSeverity::Warning,
-        "JCAST-E104",
+        "TJCAP-E104",
         "DirectShow Virtual Capture Card Not Registered or Moved",
         "The virtual capture card has not been registered yet, or the portable folder was moved after registration.",
         "1. Click 'Install / Repair Driver' in the main window or this dialog to register the current path as administrator.\n"
-        "2. If OBS Studio is already open, restart OBS to see 'JCast for iOS (Video)' and 'JCast for iOS (Audio)'.",
+        "2. If OBS Studio is already open, restart OBS to see 'TJCap for iOS (Video)' and 'TJCap for iOS (Audio)'.",
         true,
     },
     {
         DiagCode::E201_ZadigDriverConflict,
         DiagSeverity::Critical,
-        "JCAST-E201",
+        "TJCAP-E201",
         "Apple USB Composite Driver Overwritten by Zadig (WinUSB / libusbK)",
         "A third-party tool such as Zadig replaced the original Apple Mobile Device USB Composite Device driver, breaking Apple pairing and QuickTime configuration switching.",
         "1. Open Windows Device Manager -> locate the Apple / WinUSB device -> right-click 'Uninstall device' and check 'Attempt to remove the driver'.\n"
@@ -267,7 +267,7 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E202_UpperFilterMissing,
         DiagSeverity::Warning,
-        "JCAST-E202",
+        "TJCAP-E202",
         "libusb0 Safe Filter Not Attached to This iOS Device Yet",
         "When connecting this iPhone / iPad for the first time, UpperFilters=libusb0 has not been attached to its device node yet.",
         "1. Keep your device plugged in and click 'Install / Repair Driver' (or 'Smart Start') to attach the non-destructive filter.\n"
@@ -277,7 +277,7 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E203_UsbOpenAccessDenied,
         DiagSeverity::Error,
-        "JCAST-E203",
+        "TJCAP-E203",
         "Failed to Open iOS USB Device (LIBUSB_ERROR_ACCESS)",
         "The Apple device was found, but Windows denied opening a low-level USB handle — usually because the device needs one replug right after filter installation.",
         "1. Unplug the USB cable from your iPhone / iPad, wait 2 seconds, and plug it back in.\n"
@@ -287,7 +287,7 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E204_UsbInterfaceBusy,
         DiagSeverity::Error,
-        "JCAST-E204",
+        "TJCAP-E204",
         "iOS QuickTime Media Interface Is Busy (LIBUSB_ERROR_BUSY)",
         "Another screen-mirroring app, VM USB passthrough, or leftover ios_vcam_host.exe is currently holding SubClass 0x2A.",
         "1. Close any other wired iOS mirroring tools or phone manager software.\n"
@@ -297,7 +297,7 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E301_IosNotTrustedOrLocked,
         DiagSeverity::Warning,
-        "JCAST-E301",
+        "TJCAP-E301",
         "Device Not Trusted / Locked or QuickTime Mode Unavailable",
         "The QuickTime hidden configuration command was sent, but SubClass 0x2A did not appear — usually because the iPhone is locked, 'Trust This Computer' was not tapped, or a charge-only cable is used.",
         "1. Unlock your iPhone / iPad, keep the screen awake, and tap 'Trust' + enter your passcode when prompted.\n"
@@ -307,7 +307,7 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E302_SetConfigFailed,
         DiagSeverity::Error,
-        "JCAST-E302",
+        "TJCAP-E302",
         "Failed to Switch USB QuickTime Configuration (libusb_set_configuration)",
         "The USB bus rejected switching to the high-bandwidth media configuration, often due to filter state or an underpowered USB hub.",
         "1. Click 'Install / Repair Driver' to verify the libusb0 UpperFilter state.\n"
@@ -317,7 +317,7 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E303_HandshakeNoFrames,
         DiagSeverity::Warning,
-        "JCAST-E303",
+        "TJCAP-E303",
         "QuickTime Interface Claimed but Timed Out Waiting for Video Frames",
         "The QuickTime media channel opened and handshake completed, but no H.264 frames arrived within 8 seconds (often caused by locking the phone mid-handshake or stalled iOS media daemon).",
         "1. Unlock your iPhone / iPad and swipe the screen.\n"
@@ -327,7 +327,7 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E304_UsbTransferIoDrop,
         DiagSeverity::Error,
-        "JCAST-E304",
+        "TJCAP-E304",
         "USB Transfer I/O Drop or Bandwidth Overflow Mid-Stream",
         "Received LIBUSB_ERROR_IO / PIPE / OVERFLOW / NO_DEVICE during streaming — besides intentional unplugging, this is commonly caused by a loose cable, front-panel voltage drop, or high bitrate on a noisy USB 2.0 port.",
         "1. Check the Lightning / USB-C connector and plug directly into a rear motherboard USB port.\n"
@@ -337,7 +337,7 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E401_DecoderInitFailed,
         DiagSeverity::Critical,
-        "JCAST-E401",
+        "TJCAP-E401",
         "H.264 Video Decoder Initialization Failed",
         "Both D3D11VA GPU hardware decode and CPU software decode failed to initialize.",
         "1. Try unchecking 'Enable GPU Hardware Decode (D3D11VA)' in the main window to test CPU software decode.\n"
@@ -347,9 +347,9 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E402_GpuFallbackToSoftware,
         DiagSeverity::Warning,
-        "JCAST-E402",
+        "TJCAP-E402",
         "GPU Decode Error — Seamlessly Switched to CPU Software Decode",
-        "D3D11VA experienced a driver reset (TDR) or unsupported format; JCast automatically fell back to CPU software decode to keep your stream live.",
+        "D3D11VA experienced a driver reset (TDR) or unsupported format; TJCap automatically fell back to CPU software decode to keep your stream live.",
         "1. Your stream has automatically recovered and remains active.\n"
         "2. If software decode latency exceeds 14ms at 2K+, consider updating your GPU driver or selecting 1080p max resolution.",
         false,
@@ -357,7 +357,7 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E403_HighDecodeLatency,
         DiagSeverity::Warning,
-        "JCAST-E403",
+        "TJCAP-E403",
         "High Decode Pipeline Latency (Exceeding 16.7ms 60fps Budget)",
         "Per-frame decode and scaling latency is high and may cause dropped frames at 60fps — commonly when running 2K+ without GPU hardware decode.",
         "1. Make sure 'Enable GPU Hardware Decode (D3D11VA)' is checked.\n"
@@ -367,9 +367,9 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E501_AudioEndpointLost,
         DiagSeverity::Warning,
-        "JCAST-E501",
+        "TJCAP-E501",
         "PC Audio Monitoring Output Disconnected or Invalidated",
-        "Your headset, USB DAC, or Bluetooth output disconnected mid-stream (AUDCLNT_E_DEVICE_INVALIDATED). Note: OBS 'JCast for iOS (Audio)' is unaffected and continues receiving audio.",
+        "Your headset, USB DAC, or Bluetooth output disconnected mid-stream (AUDCLNT_E_DEVICE_INVALIDATED). Note: OBS 'TJCap for iOS (Audio)' is unaffected and continues receiving audio.",
         "1. If you only need OBS audio capture, you can safely ignore this warning.\n"
         "2. To restore PC headphone monitoring, reconnect your audio device and restart capture once.",
         false,
@@ -377,17 +377,17 @@ const DiagCodeSpec kSpecsEn[] = {
     {
         DiagCode::E502_SharedMemInitFailed,
         DiagSeverity::Critical,
-        "JCAST-E502",
+        "TJCAP-E502",
         "Failed to Create High-Res Shared Memory (IosUsbVcamSharedMemV2)",
         "Insufficient Windows virtual memory (pagefile commit charge) or a stale elevated process is locking the shared section.",
         "1. Close memory-heavy idle apps and verify the Windows paging file is enabled.\n"
-        "2. Restart JCast for iOS and OBS Studio.",
+        "2. Restart TJCap for iOS and OBS Studio.",
         false,
     },
     {
         DiagCode::E503_HostUnexpectedExit,
         DiagSeverity::Critical,
-        "JCAST-E503",
+        "TJCAP-E503",
         "Background Capture Engine (ios_vcam_host.exe) Exited Unexpectedly",
         "The capture engine terminated prematurely with a non-zero exit code without a manual stop request.",
         "1. Review the process exit code details and recent events below.\n"
@@ -466,7 +466,7 @@ const DiagCodeSpec& LookupDiagSpec(DiagCode code, AppLanguage lang) {
 }
 
 DiagCode ParseDiagCodeToken(std::string_view token) {
-    if (token.rfind("JCAST-", 0) == 0) {
+    if (token.rfind("TJCAP-", 0) == 0 || token.rfind("JCAST-", 0) == 0) {
         token.remove_prefix(6);
     }
     if (token.size() >= 4 && (token[0] == 'E' || token[0] == 'e')) {
@@ -513,10 +513,10 @@ DiagCode ClassifyUsbOrTransportError(std::string_view raw_err) {
 std::string FormatHostDiagLine(DiagCode code, DiagSeverity sev, std::string_view detail_utf8) {
     const auto& spec = LookupDiagSpec(code);
     const char* short_code = spec.code_str;
-    if (std::strncmp(short_code, "JCAST-", 6) == 0) {
+    if (std::strncmp(short_code, "TJCAP-", 6) == 0 || std::strncmp(short_code, "JCAST-", 6) == 0) {
         short_code += 6;
     }
-    std::string out = "[JCAST-DIAG|";
+    std::string out = "[TJCAP-DIAG|";
     out += short_code;
     out += "|";
     out += SeverityTag(sev);
@@ -526,15 +526,21 @@ std::string FormatHostDiagLine(DiagCode code, DiagSeverity sev, std::string_view
 }
 
 bool ParseHostDiagLine(std::string_view line_utf8, ParsedDiagEvent& out_event) {
-    constexpr std::string_view kPrefix = "[JCAST-DIAG|";
-    if (line_utf8.rfind(kPrefix, 0) != 0) {
+    constexpr std::string_view kPrefix = "[TJCAP-DIAG|";
+    constexpr std::string_view kLegacyPrefix = "[JCAST-DIAG|";
+    size_t prefix_len = 0;
+    if (line_utf8.rfind(kPrefix, 0) == 0) {
+        prefix_len = kPrefix.size();
+    } else if (line_utf8.rfind(kLegacyPrefix, 0) == 0) {
+        prefix_len = kLegacyPrefix.size();
+    } else {
         return false;
     }
-    size_t close_br = line_utf8.find(']', kPrefix.size());
+    size_t close_br = line_utf8.find(']', prefix_len);
     if (close_br == std::string_view::npos) {
         return false;
     }
-    std::string_view header = line_utf8.substr(kPrefix.size(), close_br - kPrefix.size());
+    std::string_view header = line_utf8.substr(prefix_len, close_br - prefix_len);
     size_t pipe_pos = header.find('|');
     if (pipe_pos == std::string_view::npos) {
         return false;
@@ -568,8 +574,8 @@ std::string DescribeProcessExitCode(uint32_t exit_code, AppLanguage lang) {
         case 0U:
             return s + (en ? " — Normal exit" : " — 正常結束");
         case 1U:
-            return s + (en ? " — Initialization error (see JCAST-E code above, e.g. missing files, USB driver, or shared memory failure)"
-                           : " — 初始化錯誤（請查看上方對應 JCAST-E 錯誤碼，如缺少檔案、USB 驅動或共享記憶體失敗）");
+            return s + (en ? " — Initialization error (see TJCAP-E code above, e.g. missing files, USB driver, or shared memory failure)"
+                           : " — 初始化錯誤（請查看上方對應 TJCAP-E 錯誤碼，如缺少檔案、USB 驅動或共享記憶體失敗）");
         case 0xC0000135U:
             return s + (en ? " — STATUS_DLL_NOT_FOUND (missing required system DLL or incomplete ZIP extraction)"
                            : " — STATUS_DLL_NOT_FOUND（系統缺少必要系統 DLL 或未完整解壓縮程式資料夾）");
@@ -697,7 +703,7 @@ std::string BuildGitHubNewIssueUrl(
     AppLanguage lang) {
     const bool en = (lang == AppLanguage::EnUS);
     const auto& spec = LookupDiagSpec(primary_code, lang);
-    std::string title = (en ? "[Bug Report] JCast for iOS v" : "[診斷回報] JCast for iOS v") + std::string(app_version);
+    std::string title = (en ? "[Bug Report] TJCap for iOS v" : "[診斷回報] TJCap for iOS v") + std::string(app_version);
     if (primary_code != DiagCode::None) {
         title += " — ";
         title += spec.code_str;

@@ -57,29 +57,42 @@ AppLanguage ResolveEffectiveLanguage(AppLanguagePref pref, uint16_t windows_lang
 
 #ifdef _WIN32
 namespace {
-constexpr const wchar_t* kSettingsRegSubkey = L"Software\\JCastForiOS";
+constexpr const wchar_t* kSettingsRegSubkey = L"Software\\TJCapForiOS";
+constexpr const wchar_t* kLegacySettingsRegSubkey = L"Software\\JCastForiOS";
 constexpr const wchar_t* kLanguageRegValue = L"Language";
-}  // namespace
 
-AppLanguagePref LoadSavedLanguagePref() {
+bool TryReadLanguagePrefFromKey(const wchar_t* subkey, AppLanguagePref& out_pref) {
     HKEY key = nullptr;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, kSettingsRegSubkey, 0, KEY_READ, &key) != ERROR_SUCCESS) {
-        return AppLanguagePref::Auto;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, subkey, 0, KEY_READ, &key) != ERROR_SUCCESS) {
+        return false;
     }
     wchar_t buf[64] = {0};
     DWORD cb = sizeof(buf) - sizeof(wchar_t);
     DWORD type = 0;
-    AppLanguagePref pref = AppLanguagePref::Auto;
+    bool found = false;
     if (RegQueryValueExW(key, kLanguageRegValue, nullptr, &type, reinterpret_cast<BYTE*>(buf), &cb) == ERROR_SUCCESS &&
         type == REG_SZ) {
         std::string ascii;
         for (size_t i = 0; i < 63 && buf[i] != L'\0'; ++i) {
             if (buf[i] < 128) ascii.push_back(static_cast<char>(buf[i]));
         }
-        pref = ParseLanguagePrefValue(ascii);
+        out_pref = ParseLanguagePrefValue(ascii);
+        found = true;
     }
     RegCloseKey(key);
-    return pref;
+    return found;
+}
+}  // namespace
+
+AppLanguagePref LoadSavedLanguagePref() {
+    AppLanguagePref pref = AppLanguagePref::Auto;
+    if (TryReadLanguagePrefFromKey(kSettingsRegSubkey, pref)) {
+        return pref;
+    }
+    if (TryReadLanguagePrefFromKey(kLegacySettingsRegSubkey, pref)) {
+        return pref;
+    }
+    return AppLanguagePref::Auto;
 }
 
 bool SaveLanguagePref(AppLanguagePref pref) {

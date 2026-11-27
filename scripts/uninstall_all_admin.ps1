@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 $ErrorActionPreference = "Continue"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -13,10 +13,10 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
 Set-Location -LiteralPath $PSScriptRoot
 
 Write-Host "=============================================================" -ForegroundColor Cyan
-Write-Host "  JCast for iOS 完整移除程式" -ForegroundColor Cyan
+Write-Host "  TJCap for iOS 完整移除程式" -ForegroundColor Cyan
 Write-Host "=============================================================" -ForegroundColor Cyan
 
-foreach ($procName in @("JCast for iOS", "ios_vcam_gui", "ios_vcam_host")) {
+foreach ($procName in @("TJCap for iOS", "JCast for iOS", "ios_vcam_gui", "ios_vcam_host")) {
     $p = Get-Process -Name $procName -ErrorAction SilentlyContinue
     if ($p) {
         Stop-Process -Name $procName -Force -ErrorAction SilentlyContinue
@@ -31,5 +31,5 @@ if (Test-Path ".\ios_vcam_driver_setup.exe") {
 }
 
 Write-Host ""
-Write-Host "[完成] 已移除 Apple USB UpperFilter 過濾層並反註冊 JCast for iOS 虛擬擷取卡。" -ForegroundColor Green
+Write-Host "[完成] 已移除 Apple USB UpperFilter 過濾層並反註冊 TJCap for iOS 虛擬擷取卡。" -ForegroundColor Green
 Read-Host "按 Enter 鍵關閉視窗"

@@ -193,7 +193,7 @@ std::filesystem::path AppDir() {
 
 void UnblockDownloadedFiles(const std::filesystem::path& base_dir) {
     const wchar_t* rel_files[] = {
-        L"JCast for iOS.exe",
+        L"TJCap for iOS.exe",
         L"ios_vcam_gui.exe",
         L"ios_vcam_dshow.dll",
         L"ios_vcam_host.exe",
@@ -492,7 +492,7 @@ public:
 
     bool RunModal() {
         static bool class_registered = false;
-        const wchar_t* kClsName = L"JCastUpdateModalWndClass";
+        const wchar_t* kClsName = L"TJCapUpdateModalWndClass";
         if (!class_registered) {
             WNDCLASSEXW wc{};
             wc.cbSize = sizeof(wc);
@@ -514,7 +514,7 @@ public:
         int pos_y = prc.top + ((prc.bottom - prc.top) - dlg_h) / 2;
 
         std::wstring title =
-            std::wstring(LText(lang_, L"JCast for iOS — 發現新版本 ", L"JCast for iOS — Update Available ")) +
+            std::wstring(LText(lang_, L"TJCap for iOS — 發現新版本 ", L"TJCap for iOS — Update Available ")) +
             Utf8ToWide(info_.latest.tag_name);
         EnableWindow(parent_, FALSE);
 
@@ -692,9 +692,9 @@ private:
         wchar_t tmp_buf[MAX_PATH * 2] = {0};
         DWORD n = GetTempPathW(MAX_PATH * 2 - 1, tmp_buf);
         std::filesystem::path tmp_dir = (n > 0) ? std::filesystem::path(tmp_buf) : app_dir_;
-        tmp_dir /= L"JCast_For_iOS_Update";
+        tmp_dir /= L"TJCap_For_iOS_Update";
         std::filesystem::path safe_leaf = std::filesystem::path(Utf8ToWide(target_asset_.name)).filename();
-        if (safe_leaf.empty()) safe_leaf = use_setup_exe_ ? L"JCast-Update-Setup.exe" : L"JCast-Update-Portable.zip";
+        if (safe_leaf.empty()) safe_leaf = use_setup_exe_ ? L"TJCap-Update-Setup.exe" : L"TJCap-Update-Portable.zip";
         downloaded_file_ = tmp_dir / safe_leaf;
 
         downloading_ = true;
@@ -972,7 +972,7 @@ public:
           on_clear_faults_(std::move(on_clear_faults)) {}
 
     void RunModal() {
-        const wchar_t* kClassName = L"JCastDiagnosticsModalWndClass";
+        const wchar_t* kClassName = L"TJCapDiagnosticsModalWndClass";
         static bool registered = false;
         if (!registered) {
             WNDCLASSEXW wc{};
@@ -1002,8 +1002,8 @@ public:
         hwnd_ = CreateWindowExW(
             WS_EX_DLGMODALFRAME,
             kClassName,
-            T(L"JCast for iOS — 🩺 智慧故障偵測與一鍵診斷報錯中心",
-              L"JCast for iOS — 🩺 Smart Fault Diagnostics & Bug Report Center"),
+            T(L"TJCap for iOS — 🩺 智慧故障偵測與一鍵診斷報錯中心",
+              L"TJCap for iOS — 🩺 Smart Fault Diagnostics & Bug Report Center"),
             WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
             pos_x,
             pos_y,
@@ -1096,7 +1096,7 @@ private:
         std::string rpt;
         rpt.reserve(8192);
         rpt += "======================================================================\n";
-        rpt += std::string("  JCast for iOS v" IOS_VCAM_VER_DISPLAY_STR) +
+        rpt += std::string("  TJCap for iOS v" IOS_VCAM_VER_DISPLAY_STR) +
                Tu(" — 系統環境自檢與故障診斷報錯單\n", " — System Self-Check & Fault Diagnostic Report\n");
         rpt += "======================================================================\n\n";
 
@@ -1114,14 +1114,14 @@ private:
                 if (i > 0) rpt += ", ";
                 rpt += WideToUtf8Str(h.missing_core_files[i]);
             }
-            rpt += " (JCAST-E101)\n";
+            rpt += " (TJCAP-E101)\n";
         }
         rpt += std::string(Tu("4. 系統 H.264 元件: ", "4. System H.264 MFT : ")) +
                (h.mf_h264_ok
                     ? Tu("[PASS] Windows Media Foundation (mfplat / msmpeg2vdec) 正常\n",
                          "[PASS] Windows Media Foundation (mfplat / msmpeg2vdec) ready\n")
-                    : Tu("[FAIL] 缺少 Media Feature Pack H.264 解碼元件 (JCAST-E103)\n",
-                         "[FAIL] Missing Media Feature Pack H.264 decoder (JCAST-E103)\n"));
+                    : Tu("[FAIL] 缺少 Media Feature Pack H.264 解碼元件 (TJCAP-E103)\n",
+                         "[FAIL] Missing Media Feature Pack H.264 decoder (TJCAP-E103)\n"));
         if (h.apple_service_running) {
             rpt += Tu("5. Apple 配對服務: [PASS] Apple 行動裝置服務與驅動運作中\n",
                       "5. Apple Pairing    : [PASS] Apple Mobile Device service & driver active\n");
@@ -1129,8 +1129,8 @@ private:
             rpt += Tu("5. Apple 配對服務: [PASS] 已偵測到 Apple USB 驅動元件\n",
                       "5. Apple Pairing    : [PASS] Apple USB driver components detected\n");
         } else {
-            rpt += Tu("5. Apple 配對服務: [WARN] 未偵測到 Apple 裝置 / iTunes 服務 (JCAST-E102)\n",
-                      "5. Apple Pairing    : [WARN] Apple Devices / iTunes service not detected (JCAST-E102)\n");
+            rpt += Tu("5. Apple 配對服務: [WARN] 未偵測到 Apple 裝置 / iTunes 服務 (TJCAP-E102)\n",
+                      "5. Apple Pairing    : [WARN] Apple Devices / iTunes service not detected (TJCAP-E102)\n");
         }
         rpt += std::string(Tu("6. WHQL 過濾服務 : ", "6. WHQL Filter Svc  : ")) +
                (h.libusb_service_ok
@@ -1138,14 +1138,14 @@ private:
                     : Tu("[WARN] libusb0 尚未安裝（點「一鍵修復驅動」自動完成）\n",
                          "[WARN] libusb0 not installed yet (click 'Repair Driver' to install)\n"));
         if (h.dshow == DshowRegState::Ready) {
-            rpt += Tu("7. DirectShow 鏡頭: [PASS] JCast for iOS (Video/Audio) 註冊正常\n",
-                      "7. DirectShow Cam   : [PASS] JCast for iOS (Video/Audio) registered\n");
+            rpt += Tu("7. DirectShow 鏡頭: [PASS] TJCap for iOS (Video/Audio) 註冊正常\n",
+                      "7. DirectShow Cam   : [PASS] TJCap for iOS (Video/Audio) registered\n");
         } else if (h.dshow == DshowRegState::PathMismatch) {
-            rpt += Tu("7. DirectShow 鏡頭: [WARN] 資料夾路徑已變更，需重新註冊 (JCAST-E104)\n",
-                      "7. DirectShow Cam   : [WARN] App folder moved; re-registration needed (JCAST-E104)\n");
+            rpt += Tu("7. DirectShow 鏡頭: [WARN] 資料夾路徑已變更，需重新註冊 (TJCAP-E104)\n",
+                      "7. DirectShow Cam   : [WARN] App folder moved; re-registration needed (TJCAP-E104)\n");
         } else {
-            rpt += Tu("7. DirectShow 鏡頭: [WARN] 尚未註冊虛擬擷取卡 (JCAST-E104)\n",
-                      "7. DirectShow Cam   : [WARN] Virtual capture card not registered yet (JCAST-E104)\n");
+            rpt += Tu("7. DirectShow 鏡頭: [WARN] 尚未註冊虛擬擷取卡 (TJCAP-E104)\n",
+                      "7. DirectShow Cam   : [WARN] Virtual capture card not registered yet (TJCAP-E104)\n");
         }
 
         switch (h.ios_usb) {
@@ -1155,14 +1155,14 @@ private:
                        std::string(UsbLinkSpeedName(usb_speed_)) + ")\n";
                 break;
             case IosUsbState::PluggedNeedFilter:
-                rpt += Tu("8. iOS USB 裝置  : [WARN] 已插入手機但尚未掛載 libusb0 過濾層 (JCAST-E202)\n",
-                          "8. iOS USB Device   : [WARN] Device plugged in but UpperFilter=libusb0 missing (JCAST-E202)\n");
+                rpt += Tu("8. iOS USB 裝置  : [WARN] 已插入手機但尚未掛載 libusb0 過濾層 (TJCAP-E202)\n",
+                          "8. iOS USB Device   : [WARN] Device plugged in but UpperFilter=libusb0 missing (TJCAP-E202)\n");
                 break;
             case IosUsbState::PluggedZadigConflict:
                 rpt += std::string(Tu("8. iOS USB 裝置  : [FAIL] 父複合裝置遭 ",
                                       "8. iOS USB Device   : [FAIL] Composite parent overwritten by ")) +
                        WideToUtf8Str(h.ios_service_name) +
-                       Tu(" 覆蓋原廠驅動 (JCAST-E201)\n", " instead of Apple driver (JCAST-E201)\n");
+                       Tu(" 覆蓋原廠驅動 (TJCAP-E201)\n", " instead of Apple driver (TJCAP-E201)\n");
                 break;
             case IosUsbState::Unplugged:
                 rpt += Tu("8. iOS USB 裝置  : [INFO] 目前尚未插入 iPhone / iPad USB\n",
@@ -1173,7 +1173,7 @@ private:
         rpt += Tu("\n【二、偵測到的錯誤碼解析與排除步驟】\n", "\n[2. Detected Error Codes & Troubleshooting Steps]\n");
         if (active_codes.empty()) {
             rpt += Tu("• 目前未偵測到異常錯誤碼。若您在 OBS 看不到畫面，請確認先點擊本程式「智慧一鍵啟動」再開啟 OBS。\n",
-                      "• No error codes detected. If OBS shows a blank screen, start capture in JCast first, then toggle the OBS source.\n");
+                      "• No error codes detected. If OBS shows a blank screen, start capture in TJCap first, then toggle the OBS source.\n");
         } else {
             for (DiagCode dc : active_codes) {
                 const auto& sp = LookupDiagSpec(dc, lang_);
@@ -1377,7 +1377,7 @@ private:
         std::swprintf(
             fname,
             96,
-            L"JCast_DiagReport_%04u%02u%02u_%02u%02u%02u.txt",
+            L"TJCap_DiagReport_%04u%02u%02u_%02u%02u%02u.txt",
             st.wYear,
             st.wMonth,
             st.wDay,
@@ -1769,7 +1769,7 @@ public:
             return;
         }
 
-        const wchar_t* kCls = L"JCastLiveMonitorWndClass";
+        const wchar_t* kCls = L"TJCapLiveMonitorWndClass";
         if (!dark_bg_brush_) {
             dark_bg_brush_ = CreateSolidBrush(RGB(10, 12, 16));
         }
@@ -1824,8 +1824,8 @@ public:
         hwnd_ = CreateWindowExW(
             0,
             kCls,
-            T(L"JCast Live Monitor — 獨立外接螢幕視窗 [雙擊 / F11: 全螢幕 ｜ F12: 原畫質截圖 ｜ 右鍵: 選單]",
-              L"JCast Live Monitor — Standalone Display [DblClick / F11: Fullscreen | F12: Screenshot | Right-Click: Menu]"),
+            T(L"TJCap Live Monitor — 獨立外接螢幕視窗 [雙擊 / F11: 全螢幕 ｜ F12: 原畫質截圖 ｜ 右鍵: 選單]",
+              L"TJCap Live Monitor — Standalone Display [DblClick / F11: Fullscreen | F12: Screenshot | Right-Click: Menu]"),
             style,
             pos_x,
             pos_y,
@@ -1872,7 +1872,7 @@ private:
 
     void UpdateTitleBar() {
         if (!hwnd_ || fullscreen_) return;
-        std::wstring t = L"JCast Live Monitor";
+        std::wstring t = L"TJCap Live Monitor";
         if (has_live_frame_ && src_w_ > 0 && src_h_ > 0) {
             t += L" (" + std::to_wstring(src_w_) + L"×" + std::to_wstring(src_h_) + L")";
         }
@@ -2332,7 +2332,7 @@ public:
         wc.hIconSm = icon_small_ ? icon_small_ : wc.hIcon;
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
-        wc.lpszClassName = L"JCastForIosGuiWndClass";
+        wc.lpszClassName = L"TJCapForIosGuiWndClass";
         RegisterClassExW(&wc);
 
         RECT work{};
@@ -2347,8 +2347,8 @@ public:
         hwnd_ = CreateWindowExW(
             0,
             wc.lpszClassName,
-            T(L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — 智慧擷取控制台 (故障偵測報錯 × 健康度儀表板 × 即時預覽)",
-              L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — Smart Capture Console (Diagnostics × Health Telemetry × Live Preview)"),
+            T(L"TJCap for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — 智慧擷取控制台 (故障偵測報錯 × 健康度儀表板 × 即時預覽)",
+              L"TJCap for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — Smart Capture Console (Diagnostics × Health Telemetry × Live Preview)"),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
             pos_x, pos_y, win_w, win_h,
             nullptr, nullptr, hInst, this);
@@ -2750,9 +2750,9 @@ private:
             [this]() { OpenScreenshotsFolder(); });
 
         AppendLogLine(T(
-            L"[歡迎] 歡迎使用 JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR
+            L"[歡迎] 歡迎使用 TJCap for iOS v" IOS_VCAM_VER_DISPLAY_WSTR
             L"！支援「🌐 繁體中文 / English 介面語言即時切換」、智慧故障診斷與即時串流健康度儀表板！",
-            L"[Welcome] Welcome to JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR
+            L"[Welcome] Welcome to TJCap for iOS v" IOS_VCAM_VER_DISPLAY_WSTR
             L"! Features live Language switching (Traditional Chinese / English), Smart Diagnostics & Stream Health Telemetry!"));
         RefreshHealthAndUi(true);
         TickTelemetryDashboard(true);
@@ -2767,8 +2767,8 @@ private:
 
         SetWindowTextW(
             hwnd_,
-            T(L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — 智慧擷取控制台 (故障偵測報錯 × 健康度儀表板 × 即時預覽)",
-              L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — Smart Capture Console (Diagnostics × Health Telemetry × Live Preview)"));
+            T(L"TJCap for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — 智慧擷取控制台 (故障偵測報錯 × 健康度儀表板 × 即時預覽)",
+              L"TJCap for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — Smart Capture Console (Diagnostics × Health Telemetry × Live Preview)"));
 
         if (grp_pref_) {
             SetWindowTextW(
@@ -3006,8 +3006,8 @@ private:
             CB_ADDSTRING,
             0,
             reinterpret_cast<LPARAM>(T(
-                L"僅輸出至 OBS「JCast for iOS (Audio)」（不在電腦喇叭播放）",
-                L"OBS 'JCast for iOS (Audio)' Only (Mute PC Speakers)")));
+                L"僅輸出至 OBS「TJCap for iOS (Audio)」（不在電腦喇叭播放）",
+                L"OBS 'TJCap for iOS (Audio)' Only (Mute PC Speakers)")));
         audio_endpoint_matches_.push_back(L"__NONE__");
 
         auto eps = WasapiAudioRouter::EnumerateRenderEndpoints();
@@ -3112,7 +3112,7 @@ private:
             if (needs_setup) {
                 SetWindowTextW(
                     btn_smart_start_,
-                    T(L"🚀 智慧一鍵啟動（自動安裝驅動與 JCast 虛擬擷取卡 ➔ 開始投影）",
+                    T(L"🚀 智慧一鍵啟動（自動安裝驅動與 TJCap 虛擬擷取卡 ➔ 開始投影）",
                       L"🚀 Smart Start (Auto-Install Driver & Virtual Capture Card -> Begin Capture)"));
             } else {
                 SetWindowTextW(
@@ -3151,10 +3151,10 @@ private:
             bg_color = RGB(232, 248, 238);
             accent_color = RGB(22, 136, 72);
             headline = running_mock_
-                           ? T(L"🟢 JCast 正在輸出自測動態彩條與 48kHz 測試音（請開啟 OBS 預覽）",
-                               L"🟢 JCast Mock Test Active — Animated Color Bars + 48kHz Tone")
-                           : T(L"🟢 JCast 有線投影執行中（已鎖定所選解析度 @ 60fps + 48kHz 音訊）",
-                               L"🟢 JCast Wired Capture Active (Locked Resolution @ 60fps + 48kHz Audio)");
+                           ? T(L"🟢 TJCap 正在輸出自測動態彩條與 48kHz 測試音（請開啟 OBS 預覽）",
+                               L"🟢 TJCap Mock Test Active — Animated Color Bars + 48kHz Tone")
+                           : T(L"🟢 TJCap 有線投影執行中（已鎖定所選解析度 @ 60fps + 48kHz 音訊）",
+                               L"🟢 TJCap Wired Capture Active (Locked Resolution @ 60fps + 48kHz Audio)");
         } else if (health_.ios_usb == IosUsbState::PluggedZadigConflict) {
             bg_color = RGB(255, 240, 240);
             accent_color = RGB(196, 43, 28);
@@ -3174,8 +3174,8 @@ private:
         } else {
             bg_color = RGB(242, 245, 250);
             accent_color = RGB(45, 95, 185);
-            headline = T(L"🔌 JCast for iOS 已就緒 — 請插上已點「信任」的 iPhone/iPad 自動辨識 USB 速率",
-                         L"🔌 JCast for iOS Ready — Plug in a Trusted iPhone/iPad to Auto-Detect USB Speed");
+            headline = T(L"🔌 TJCap for iOS 已就緒 — 請插上已點「信任」的 iPhone/iPad 自動辨識 USB 速率",
+                         L"🔌 TJCap for iOS Ready — Plug in a Trusted iPhone/iPad to Auto-Detect USB Speed");
         }
 
         RECT local_rc{0, 0, w, h};
@@ -3216,14 +3216,14 @@ private:
 
         std::wstring dshow_txt;
         if (health_.dshow == DshowRegState::Ready) {
-            dshow_txt = T(L"• DirectShow 虛擬擷取卡 (JCast for iOS)：✅ 已安裝",
-                          L"• DirectShow Virtual Capture Card (JCast for iOS): ✅ Installed");
+            dshow_txt = T(L"• DirectShow 虛擬擷取卡 (TJCap for iOS)：✅ 已安裝",
+                          L"• DirectShow Virtual Capture Card (TJCap for iOS): ✅ Installed");
         } else if (health_.dshow == DshowRegState::PathMismatch) {
-            dshow_txt = T(L"• DirectShow 虛擬擷取卡 (JCast for iOS)：⚠️ 資料夾已移動（點一鍵啟動自動更新）",
-                          L"• DirectShow Virtual Capture Card (JCast for iOS): ⚠️ Folder Moved (Auto-fixes on Start)");
+            dshow_txt = T(L"• DirectShow 虛擬擷取卡 (TJCap for iOS)：⚠️ 資料夾已移動（點一鍵啟動自動更新）",
+                          L"• DirectShow Virtual Capture Card (TJCap for iOS): ⚠️ Folder Moved (Auto-fixes on Start)");
         } else {
-            dshow_txt = T(L"• DirectShow 虛擬擷取卡 (JCast for iOS)：⏳ 尚未註冊（點一鍵啟動自動完成）",
-                          L"• DirectShow Virtual Capture Card (JCast for iOS): ⏳ Not Registered (Auto-fixes on Start)");
+            dshow_txt = T(L"• DirectShow 虛擬擷取卡 (TJCap for iOS)：⏳ 尚未註冊（點一鍵啟動自動完成）",
+                          L"• DirectShow Virtual Capture Card (TJCap for iOS): ⏳ Not Registered (Auto-fixes on Start)");
         }
 
         std::wstring usb_drv_txt = health_.libusb_service_ok
@@ -3285,8 +3285,8 @@ private:
                             L"[Error] Missing ios_vcam_driver_setup.exe. Please verify all app files are extracted!"));
             MessageBoxW(
                 hwnd_,
-                T(L"找不到 ios_vcam_driver_setup.exe，請確認完整安裝或解壓縮 JCast for iOS 資料夾！",
-                  L"ios_vcam_driver_setup.exe was not found. Please reinstall or extract the full JCast for iOS folder!"),
+                T(L"找不到 ios_vcam_driver_setup.exe，請確認完整安裝或解壓縮 TJCap for iOS 資料夾！",
+                  L"ios_vcam_driver_setup.exe was not found. Please reinstall or extract the full TJCap for iOS folder!"),
                 T(L"缺少檔案", L"Missing File"),
                 MB_ICONERROR | MB_OK);
             return false;
@@ -3334,8 +3334,8 @@ private:
             CloseHandle(sei.hProcess);
             RefreshHealthAndUi(true);
             if (exit_code == 0) {
-                AppendLogLine(T(L"[成功] 驅動過濾層與 JCast for iOS 虛擬擷取卡設定完成！",
-                                L"[Success] Driver filter and JCast for iOS virtual capture card configured!"));
+                AppendLogLine(T(L"[成功] 驅動過濾層與 TJCap for iOS 虛擬擷取卡設定完成！",
+                                L"[Success] Driver filter and TJCap for iOS virtual capture card configured!"));
                 return true;
             }
             AppendLogLine(
@@ -3628,10 +3628,10 @@ private:
 
         AppendLogLine(
             mock_mode
-                ? T(L"=== 已啟動 JCast 免手機自測模式（彩條 + 48kHz 測試音） ===",
-                    L"=== Started JCast Mock Test Mode (Color Bars + 48kHz Tone) ===")
-                : (std::wstring(T(L"=== 已啟動 JCast 有線投影｜本次鎖定選項：",
-                                  L"=== Started JCast Wired Capture | Locked Option: ")) +
+                ? T(L"=== 已啟動 TJCap 免手機自測模式（彩條 + 48kHz 測試音） ===",
+                    L"=== Started TJCap Mock Test Mode (Color Bars + 48kHz Tone) ===")
+                : (std::wstring(T(L"=== 已啟動 TJCap 有線投影｜本次鎖定選項：",
+                                  L"=== Started TJCap Wired Capture | Locked Option: ")) +
                    chosen_res_label + L" ==="));
 
         if (log_reader_thread_.joinable()) {
@@ -3720,28 +3720,28 @@ private:
 
     void ShowAndCopyObsGuide() {
         const wchar_t* guide = T(
-            L"【JCast for iOS — OBS Studio 滿版自適應比例設定步驟】\r\n\r\n"
+            L"【TJCap for iOS — OBS Studio 滿版自適應比例設定步驟】\r\n\r\n"
             L"1. 先在本控制台插上手機（自動辨識 USB 速率並開放最大解析度選項），選好解析度後點擊「智慧一鍵啟動」。\r\n"
             L"   💡 若只想把電腦當 iPhone/iPad 外接大螢幕，直接點右下角「🖥 獨立大視窗」（按 F11 全螢幕、F12 原畫質截圖），完全不必開 OBS！\r\n"
-            L"2. 開啟 OBS Studio，新增「視訊擷取裝置」➔ 選擇：JCast for iOS (Video)\r\n"
+            L"2. 開啟 OBS Studio，新增「視訊擷取裝置」➔ 選擇：TJCap for iOS (Video)\r\n"
             L"3.「解析度/FPS 類型」保持「裝置預設值」：OBS 會自動抓到您鎖定的 iPhone/iPad 原生比例（滿版零黑邊）！\r\n"
             L"   （若您先開了 OBS 才連手機，只要在 OBS 來源點一下「停用 ➔ 啟用」就會自動刷新成原生比例）\r\n"
-            L"4. 往下捲動到底部勾選「使用自訂音訊裝置」➔ 選擇：JCast for iOS (Audio)\r\n\r\n"
-            L"（裝置名稱已複製到剪貼簿：JCast for iOS (Video)）",
-            L"[JCast for iOS — OBS Studio Native Aspect Ratio Setup Guide]\r\n\r\n"
+            L"4. 往下捲動到底部勾選「使用自訂音訊裝置」➔ 選擇：TJCap for iOS (Audio)\r\n\r\n"
+            L"（裝置名稱已複製到剪貼簿：TJCap for iOS (Video)）",
+            L"[TJCap for iOS — OBS Studio Native Aspect Ratio Setup Guide]\r\n\r\n"
             L"1. Plug in your iPhone/iPad here (USB speed & resolution tiers auto-detect), pick a max resolution, and click 'Smart Start'.\r\n"
             L"   💡 Tip: To use your PC purely as a low-latency external monitor, click '🖥 Popout View' (F11 Fullscreen, F12 Screenshot) — no OBS needed!\r\n"
-            L"2. In OBS Studio, add a 'Video Capture Device' -> select: JCast for iOS (Video)\r\n"
+            L"2. In OBS Studio, add a 'Video Capture Device' -> select: TJCap for iOS (Video)\r\n"
             L"3. Leave 'Resolution/FPS Type' on 'Device Default' so OBS automatically adapts to your device's exact native aspect ratio (zero black bars).\r\n"
             L"   (If OBS was opened before plugging in, click Deactivate -> Activate once to refresh.)\r\n"
-            L"4. Scroll down and check 'Use custom audio device' -> select: JCast for iOS (Audio)\r\n\r\n"
-            L"(Device name copied to clipboard: JCast for iOS (Video))");
+            L"4. Scroll down and check 'Use custom audio device' -> select: TJCap for iOS (Audio)\r\n\r\n"
+            L"(Device name copied to clipboard: TJCap for iOS (Video))");
 
-        CopyWideTextToClipboard(hwnd_, L"JCast for iOS (Video)");
+        CopyWideTextToClipboard(hwnd_, L"TJCap for iOS (Video)");
         MessageBoxW(
             hwnd_,
             guide,
-            T(L"JCast for iOS — OBS 設定教學", L"JCast for iOS — OBS Setup Guide"),
+            T(L"TJCap for iOS — OBS 設定教學", L"TJCap for iOS — OBS Setup Guide"),
             MB_ICONINFORMATION | MB_OK);
     }
 
@@ -3857,7 +3857,7 @@ private:
 
             if (manual_trigger) {
                 std::wstring msg =
-                    std::wstring(T(L"您目前使用的 JCast for iOS v", L"JCast for iOS v")) +
+                    std::wstring(T(L"您目前使用的 TJCap for iOS v", L"TJCap for iOS v")) +
                     IOS_VCAM_VER_DISPLAY_WSTR +
                     T(L" 已是最新版本！\r\n\r\n• GitHub 最新版本：", L" is already the latest version!\r\n\r\n• Latest on GitHub: ") +
                     Utf8ToWide(res.latest.tag_name) + L"\r\n" +
@@ -3882,8 +3882,8 @@ private:
         SetWindowTextW(btn_update_, up_lbl.c_str());
         InvalidateRect(hwnd_, &banner_rect_, FALSE);
         AppendLogLine(
-            std::wstring(T(L"[發現新版本] 🎉 GitHub 已發布 JCast for iOS ",
-                           L"[Update Available] 🎉 JCast for iOS ")) +
+            std::wstring(T(L"[發現新版本] 🎉 GitHub 已發布 TJCap for iOS ",
+                           L"[Update Available] 🎉 TJCap for iOS ")) +
             Utf8ToWide(res.latest.tag_name) +
             T(L"！點擊「", L" is available! Click '") + up_lbl +
             T(L"」即可檢視更新日誌並一鍵自動升級。", L"' to view release notes and auto-upgrade."));
@@ -4601,8 +4601,8 @@ private:
                     if (id == kIdBtnUninstall) {
                         if (MessageBoxW(
                                 hwnd_,
-                                T(L"確定要移除 Apple USB 過濾層並反註冊 JCast for iOS 虛擬擷取卡嗎？",
-                                  L"Remove the Apple USB filter driver and unregister the JCast for iOS virtual capture card?"),
+                                T(L"確定要移除 Apple USB 過濾層並反註冊 TJCap for iOS 虛擬擷取卡嗎？",
+                                  L"Remove the Apple USB filter driver and unregister the TJCap for iOS virtual capture card?"),
                                 T(L"確認解除安裝", L"Confirm Uninstall"),
                                 MB_ICONQUESTION | MB_YESNO) == IDYES) {
                             if (host_running_.load(std::memory_order_acquire)) {

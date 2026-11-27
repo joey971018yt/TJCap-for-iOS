@@ -373,7 +373,7 @@ int main(int argc, char** argv) {
             status_only = true;
         } else if (arg == "--help" || arg == "-h") {
             std::cout
-                << "iOS USB Capture Card Safe Driver & DirectShow Setup (ios_vcam_driver_setup.exe)\n"
+                << "TJCap for iOS — Safe Driver & DirectShow Setup (ios_vcam_driver_setup.exe)\n"
                 << "Usage:\n"
                 << "  ios_vcam_driver_setup.exe --install     Register DirectShow DLL & attach libusb0 UpperFilter\n"
                 << "  ios_vcam_driver_setup.exe --uninstall   Remove libusb0 UpperFilter & unregister DirectShow DLL\n"
@@ -400,7 +400,7 @@ int main(int argc, char** argv) {
     std::filesystem::path drivers_dir = base_dir / L"drivers";
 
     if (do_install) {
-        std::cout << "=== Installing iOS USB Universal Virtual Capture Card ===\n";
+        std::cout << "=== Installing TJCap for iOS Virtual Capture Card ===\n";
         bool dshow_ok = ManageDirectShowDll(dshow_dll, true);
         bool svc_ready = InstallLibUsb0KernelService(drivers_dir);
         if (svc_ready) {
@@ -414,7 +414,7 @@ int main(int argc, char** argv) {
     }
 
     if (do_uninstall) {
-        std::cout << "=== Uninstalling iOS USB Universal Virtual Capture Card ===\n";
+        std::cout << "=== Uninstalling TJCap for iOS Virtual Capture Card ===\n";
         ConfigureAppleUpperFilters(false, false);
         ManageDirectShowDll(dshow_dll, false);
         return 0;
