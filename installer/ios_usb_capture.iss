@@ -1,8 +1,8 @@
 ﻿[Setup]
 AppId={{8E74A2B1-5C19-4D83-9A41-2F6C8D90E199}
 AppName=JCast for iOS
-AppVersion=1.5.0
-AppVerName=JCast for iOS v1.5.0
+AppVersion=1.5.1
+AppVerName=JCast for iOS v1.5.1
 AppPublisher=JCast Project
 AppPublisherURL=https://github.com/joey971018yt/iOS-usb-cam
 DefaultDirName={autopf}\JCast for iOS
@@ -17,7 +17,7 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 OutputDir=..\build-installer
-OutputBaseFilename=JCast-for-iOS-Setup-v1.5.0
+OutputBaseFilename=JCast-for-iOS-Setup-v1.5.1
 CloseApplications=yes
 
 [Tasks]
@@ -32,6 +32,7 @@ Source: "..\release-msvc-win64\ios_vcam_dshow.dll"; DestDir: "{app}"; Flags: ign
 Source: "..\release-msvc-win64\libusb-1.0.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\release-msvc-win64\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\release-msvc-win64\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release-msvc-win64\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\release-msvc-win64\drivers\*"; DestDir: "{app}\drivers"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]

@@ -227,23 +227,30 @@ UsbIosTransport::~UsbIosTransport() {
     delete impl_;
 }
 
+#ifdef _WIN32
+namespace {
+
+HMODULE LoadBundledLibUsbDll() {
+    wchar_t exe_buf[MAX_PATH * 2] = {0};
+    DWORD n = GetModuleFileNameW(nullptr, exe_buf, MAX_PATH * 2 - 1);
+    if (n == 0) return nullptr;
+    std::wstring dll_path(exe_buf, n);
+    size_t slash = dll_path.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return nullptr;
+    dll_path = dll_path.substr(0, slash + 1) + L"libusb-1.0.dll";
+    return LoadLibraryExW(
+        dll_path.c_str(),
+        nullptr,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+}
+
+}  // namespace
+#endif
+
 UsbLinkSpeed UsbIosTransport::ProbeConnectedIosLinkSpeed(uint16_t* out_bcd_usb) {
     if (out_bcd_usb) *out_bcd_usb = 0;
 #ifdef _WIN32
-    wchar_t exe_buf[MAX_PATH * 2] = {0};
-    GetModuleFileNameW(nullptr, exe_buf, MAX_PATH * 2 - 1);
-    std::wstring dll_path(exe_buf);
-    size_t slash = dll_path.find_last_of(L"\\/");
-    if (slash != std::wstring::npos) {
-        dll_path = dll_path.substr(0, slash + 1) + L"libusb-1.0.dll";
-    } else {
-        dll_path = L"libusb-1.0.dll";
-    }
-
-    HMODULE dll = LoadLibraryW(dll_path.c_str());
-    if (!dll) {
-        dll = LoadLibraryW(L"libusb-1.0.dll");
-    }
+    HMODULE dll = LoadBundledLibUsbDll();
     if (!dll) {
         return UsbLinkSpeed::Unknown;
     }
@@ -293,10 +300,10 @@ bool UsbIosTransport::Initialize(std::string* out_error) {
     if (impl_->ctx != nullptr) {
         return true;
     }
-    HMODULE dll = LoadLibraryW(L"libusb-1.0.dll");
+    HMODULE dll = LoadBundledLibUsbDll();
     if (!dll) {
         if (out_error) {
-            *out_error = "Unable to load libusb-1.0.dll. Place x64 libusb-1.0.dll next to ios_vcam_host.exe.";
+            *out_error = "Unable to load libusb-1.0.dll from application directory.";
         }
         return false;
     }

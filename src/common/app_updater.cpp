@@ -682,12 +682,21 @@ bool DownloadReleaseAssetHttps(
     }
 
     std::wstring host(uc.lpszHostName, uc.dwHostNameLength);
+    std::string host_low = ToLowerAscii(WideToUtf8Local(host));
+    bool trusted_host = (host_low == "github.com") ||
+                        (host_low == "api.github.com") ||
+                        EndsWithIgnoreCase(host_low, ".githubusercontent.com");
+    if (!trusted_host) {
+        if (out_error) *out_error = "基於安全考量，已拒絕非 GitHub 官方網域之更新下載來源。";
+        return false;
+    }
+
     std::wstring path_query(uc.lpszUrlPath, uc.dwUrlPathLength);
     if (uc.dwExtraInfoLength > 0 && uc.lpszExtraInfo) {
         path_query.append(uc.lpszExtraInfo, uc.dwExtraInfoLength);
     }
 
-    WinHttpHandleGuard session(OpenConfiguredWinHttpSession(L"JCast-for-iOS-Updater/1.5.0"));
+    WinHttpHandleGuard session(OpenConfiguredWinHttpSession(L"JCast-for-iOS-Updater/1.5.1"));
     if (!session) {
         if (out_error) *out_error = "無法初始化 WinHTTP 下載工作階段。";
         return false;
@@ -1029,7 +1038,15 @@ bool LaunchPortableZipSelfUpdate(
         pf.write(script_utf8.data(), static_cast<std::streamsize>(script_utf8.size()));
     }
 
-    std::wstring cmd = L"powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
+    wchar_t sys_dir[MAX_PATH] = {0};
+    UINT sys_len = GetSystemDirectoryW(sys_dir, MAX_PATH);
+    std::filesystem::path ps_exe =
+        (sys_len > 0)
+            ? (std::filesystem::path(std::wstring(sys_dir, sys_len)) / L"WindowsPowerShell" / L"v1.0" / L"powershell.exe")
+            : std::filesystem::path(L"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+
+    std::wstring cmd = L"\"" + ps_exe.wstring() +
+                       L"\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
                        ps1_path.wstring() + L"\"";
     STARTUPINFOW si{};
     si.cb = sizeof(si);
@@ -1040,7 +1057,7 @@ bool LaunchPortableZipSelfUpdate(
     cmd_buf.push_back(L'\0');
 
     if (!CreateProcessW(
-            nullptr,
+            ps_exe.c_str(),
             cmd_buf.data(),
             nullptr,
             nullptr,

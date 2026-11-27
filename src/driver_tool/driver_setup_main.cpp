@@ -319,9 +319,12 @@ bool ManageDirectShowDll(const std::filesystem::path& dll_path, bool register_se
         std::cerr << "[DirectShow] DLL not found at: " << WideToUtf8(dll_path.wstring()) << "\n";
         return false;
     }
-    HMODULE mod = LoadLibraryW(dll_path.c_str());
+    HMODULE mod = LoadLibraryExW(
+        dll_path.c_str(),
+        nullptr,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!mod) {
-        std::cerr << "[DirectShow] LoadLibraryW failed for ios_vcam_dshow.dll (error "
+        std::cerr << "[DirectShow] LoadLibraryExW failed for ios_vcam_dshow.dll (error "
                   << GetLastError() << ").\n";
         return false;
     }
@@ -349,6 +352,8 @@ bool ManageDirectShowDll(const std::filesystem::path& dll_path, bool register_se
 
 int main(int argc, char** argv) {
 #ifdef _WIN32
+    SetDllDirectoryW(L"");
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
     SetConsoleOutputCP(CP_UTF8);
 
     bool do_install = true;

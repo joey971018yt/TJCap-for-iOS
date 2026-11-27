@@ -2,7 +2,7 @@
   <img src="assets/app_icon.png" width="112" alt="JCast for iOS App Icon" />
 </p>
 
-<h1 align="center">JCast for iOS v1.5.0</h1>
+<h1 align="center">JCast for iOS v1.5.1</h1>
 
 <p align="center">
   <b>Windows 10 / 11 專用 — iPhone / iPad 有線 USB 速率智慧辨識 × 2K+ 原生自適應虛擬擷取卡 App（視訊 + 48kHz 無損音訊）</b><br/>
@@ -15,10 +15,10 @@
 
 請直接前往本專案右側的 **[Releases（發布頁面）](../../releases/latest)** 下載：
 
-1. **📦 正式安裝版 App（最推薦）：`JCast-for-iOS-Setup-v1.5.0.exe`**
+1. **📦 正式安裝版 App（最推薦）：`JCast-for-iOS-Setup-v1.5.1.exe`**
    - 雙擊執行安裝精靈，自動在**桌面**與**開始選單**建立帶有專屬圖示的 **「JCast for iOS」** App，並自動註冊 DirectShow 虛擬擷取卡與微軟 WHQL 簽章驅動服務。
    - 內建 **GitHub Releases 自動更新功能**：日後有新版本時，App 內點擊 **`⬆️ 升級`** 即可自動驗證 `SHA-256` 並一鍵完成安裝包升級！
-2. **📁 免安裝綠色便攜版 App：`JCast-for-iOS-Portable-v1.5.0.zip`**
+2. **📁 免安裝綠色便攜版 App：`JCast-for-iOS-Portable-v1.5.1.zip`**
    - 解壓縮後直接雙擊資料夾內帶專屬圖示的 **`JCast for iOS.exe`** 即可使用（同樣支援便攜版原地一鍵自動更新！）。
 
 > **前置需求**：電腦需安裝微軟市集版 **Apple 裝置 (Apple Devices)** 或 **iTunes**（提供 Apple 原廠手機信任配對服務）。
@@ -51,6 +51,7 @@
 
 完整歷史紀錄請參閱 **[CHANGELOG.md](CHANGELOG.md)**：
 
+* **`v1.5.1` (2026-11-26)**：**Windows 系統安全性全面加固**（防範 DLL 劫持 `CWE-427`、更新器網域白名單與路徑純化、啟用硬體級 `CFG` / `CET Shadow Stack` / 高熵 `ASLR` / `DEP`，並附帶第三方開源授權聲明 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)）。
 * **`v1.5.0` (2026-11-26)**：串接 **GitHub Releases API** 內建**一鍵軟體自動更新功能**（支援背景版本檢查、Release Notes 預覽、即時進度條、`SHA-256` 雜湊安全校驗，以及安裝版／便攜版雙模式自動升級）。
 * **`v1.4.0` (2026-11-26)**：正式更名為 **「JCast for iOS」**，並新增 **USB 接口速率自動辨識**以分級開放**可選最大傳輸解析度選項**（傳輸期間嚴格鎖定所選解析度，不中途自動變動）。
 * **`v1.3.0` (2026-11-26)**：封裝為正式獨立 **Windows App**（內嵌專屬高解析度多尺寸 App 圖示與版本資訊，發布一鍵安裝檔 `Setup.exe` 與綠色便攜版 `Portable.zip`）。

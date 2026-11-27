@@ -4,6 +4,20 @@
 
 ---
 
+## [v1.5.1] - 2026-11-26 — Windows 系統安全性全面稽核與加固
+
+### 🔒 安全性強化 (Security)
+- **防範 DLL 搜尋順序劫持 (`CWE-427`)**：
+  - 主程式 (`JCast for iOS.exe`)、背景擷取服務 (`ios_vcam_host.exe`) 與高權限驅動設定工具 (`ios_vcam_driver_setup.exe`) 啟動時全面呼叫 `SetDllDirectoryW("")` 與 `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` 移除工作目錄搜尋，並改用 `LoadLibraryExW` 鎖定應用程式目錄絕對路徑載入 `libusb-1.0.dll` 與 `ios_vcam_dshow.dll`。
+- **更新器網域白名單、防路徑穿越 (`CWE-22`) 與執行檔絕對路徑 (`CWE-426`)**：
+  - `DownloadReleaseAssetHttps` 除強制 HTTPS 與 `SHA-256` 雜湊校驗外，新增 `github.com` / `*.githubusercontent.com` 官方網域白名單限制；暫存檔名強制經 `.filename()` 純化；開啟外部網頁強制驗證 `https://github.com/` 前綴；便攜版自動替換強制鎖定 `System32` 絕對路徑啟動 PowerShell。
+- **啟用 Windows 10 / 11 硬體級記憶體防護旗標**：
+  - MSVC 建置全面啟用控制流防護 (`/guard:cf` CFG)、硬體強制堆疊保護 (`/CETCOMPAT` Intel CET / AMD Shadow Stack)、高熵 64 位元位址空間配置隨機載入 (`/HIGHENTROPYVA` `/DYNAMICBASE`) 與資料執行防止 (`/NXCOMPAT` DEP)。
+- **開源合規性聲明 (`THIRD_PARTY_NOTICES.md`)**：
+  - 新增第三方開源元件授權說明文件，明確標示動態載入之 `libusb-1.0.dll` (`LGPL-2.1`) 與獨立簽章過濾驅動 `libusb0.sys` (`GPL-3.0`)。
+
+---
+
 ## [v1.5.0] - 2026-11-26 — 串接 GitHub Releases API 內建一鍵軟體自動更新
 
 ### ✨ 新增功能 (Added)

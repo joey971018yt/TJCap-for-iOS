@@ -203,6 +203,8 @@ int main(int argc, char** argv) {
     std::cerr << std::unitbuf;
 
 #ifdef _WIN32
+    SetDllDirectoryW(L"");
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
     timeBeginPeriod(1);

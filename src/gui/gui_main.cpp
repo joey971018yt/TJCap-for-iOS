@@ -265,6 +265,17 @@ std::wstring FormatBytesMb(uint64_t bytes) {
     return buf;
 }
 
+void OpenSafeGitHubWebUrl(HWND hwnd, const std::string& candidate_utf8) {
+    const std::wstring fallback =
+        L"https://github.com/" IOS_VCAM_GITHUB_OWNER_W L"/" IOS_VCAM_GITHUB_REPO_W L"/releases/latest";
+    std::wstring wurl = Utf8ToWide(candidate_utf8);
+    std::wstring low = ToLowerWide(wurl);
+    if (low.rfind(L"https://github.com/", 0) != 0) {
+        wurl = fallback;
+    }
+    ShellExecuteW(hwnd, L"open", wurl.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+}
+
 class UpdateModalWindow {
 public:
     UpdateModalWindow(
@@ -503,7 +514,9 @@ private:
         DWORD n = GetTempPathW(MAX_PATH * 2 - 1, tmp_buf);
         std::filesystem::path tmp_dir = (n > 0) ? std::filesystem::path(tmp_buf) : app_dir_;
         tmp_dir /= L"JCast_For_iOS_Update";
-        downloaded_file_ = tmp_dir / Utf8ToWide(target_asset_.name);
+        std::filesystem::path safe_leaf = std::filesystem::path(Utf8ToWide(target_asset_.name)).filename();
+        if (safe_leaf.empty()) safe_leaf = use_setup_exe_ ? L"JCast-Update-Setup.exe" : L"JCast-Update-Portable.zip";
+        downloaded_file_ = tmp_dir / safe_leaf;
 
         downloading_ = true;
         cancel_flag_.store(false, std::memory_order_relaxed);
@@ -614,10 +627,7 @@ private:
                         return 0;
                     }
                     if (id == kIdDlgBtnOpenWeb) {
-                        std::wstring url = info_.latest.html_url.empty()
-                                               ? L"https://github.com/" IOS_VCAM_GITHUB_OWNER_W L"/" IOS_VCAM_GITHUB_REPO_W L"/releases/latest"
-                                               : Utf8ToWide(info_.latest.html_url);
-                        ShellExecuteW(dlg_hwnd_, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                        OpenSafeGitHubWebUrl(dlg_hwnd_, info_.latest.html_url);
                         return 0;
                     }
                     if (id == kIdDlgBtnCancel || id == IDCANCEL) {
@@ -775,7 +785,7 @@ public:
         hwnd_ = CreateWindowExW(
             0,
             wc.lpszClassName,
-            L"JCast for iOS v1.5 — 一鍵智慧擷取控制台 (USB 速率辨識 × 2K+ 原生自適應)",
+            L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — 一鍵智慧擷取控制台 (USB 速率辨識 × 2K+ 原生自適應)",
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
             pos_x, pos_y, win_w, win_h,
             nullptr, nullptr, hInst, this);
@@ -1013,7 +1023,7 @@ private:
         SendMessageW(edit_log_, EM_SETLIMITTEXT, 256 * 1024, 0);
 
         AppendLogLine(
-            L"[歡迎] 歡迎使用 JCast for iOS v1.5！支援 GitHub Releases 自動更新、USB 速率辨識與 2K+ 原生自適應比例！");
+            L"[歡迎] 歡迎使用 JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L"！支援 GitHub Releases 自動更新、USB 速率辨識與 2K+ 原生自適應比例！");
         RefreshHealthAndUi(true);
         SetTimer(hwnd_, kTimerRefreshId, 2000, nullptr);
         SetTimer(hwnd_, kTimerStartupUpdateId, 1500, nullptr);
@@ -1775,10 +1785,7 @@ private:
                          : (L"• 發布時間：" + Utf8ToWide(res.latest.published_at) + L"\r\n")) +
                     L"\r\n是否開啟 GitHub Releases 網頁查看完整歷史更新日誌？";
                 if (MessageBoxW(hwnd_, msg.c_str(), L"已是最新版本", MB_ICONINFORMATION | MB_YESNO) == IDYES) {
-                    std::wstring url = res.latest.html_url.empty()
-                                           ? L"https://github.com/" IOS_VCAM_GITHUB_OWNER_W L"/" IOS_VCAM_GITHUB_REPO_W L"/releases"
-                                           : Utf8ToWide(res.latest.html_url);
-                    ShellExecuteW(hwnd_, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                    OpenSafeGitHubWebUrl(hwnd_, res.latest.html_url);
                 }
             }
             return;
@@ -2014,6 +2021,9 @@ private:
 }  // namespace
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
+    SetDllDirectoryW(L"");
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+
     HMODULE u32 = GetModuleHandleW(L"user32.dll");
     if (u32) {
         using SetDpiCtxFn = BOOL(WINAPI*)(HANDLE);

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ios_usb_vcam VERSION 1.5.0 LANGUAGES CXX)
+project(ios_usb_vcam VERSION 1.5.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,11 +9,13 @@ enable_testing()
 
 if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    add_compile_options(/W4 /wd4324 /utf-8 /EHsc /DUNICODE /D_UNICODE /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_CRT_SECURE_NO_WARNINGS)
+    add_compile_options(/W4 /wd4324 /utf-8 /EHsc /guard:cf /DUNICODE /D_UNICODE /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_CRT_SECURE_NO_WARNINGS)
+    add_link_options(/DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /CETCOMPAT /GUARD:CF)
 else()
     add_compile_options(-Wall -Wextra -Wno-unused-parameter)
     if(WIN32)
         add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00)
+        add_link_options(-Wl,--dynamicbase -Wl,--high-entropy-va -Wl,--nxcompat)
     endif()
 endif()
 

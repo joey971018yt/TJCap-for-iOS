@@ -19,7 +19,7 @@ jobs:
       - name: Configure CMake (Visual Studio x64)
         run: cmake -S . -B build-msvc -A x64
 
-      - name: Build Release binaries (MSVC)
+      - name: Build Release binaries (MSVC with CFG / CET / High-Entropy ASLR / DEP)
         run: cmake --build build-msvc --config Release --parallel
 
       - name: Run protocol, USB speed gating, updater & media pipeline unit tests on Windows
@@ -39,6 +39,7 @@ jobs:
           Copy-Item "scripts\uninstall_all_admin.ps1" "release-msvc-win64\"
           Copy-Item "README.md" "release-msvc-win64\"
           Copy-Item "CHANGELOG.md" "release-msvc-win64\"
+          Copy-Item "THIRD_PARTY_NOTICES.md" "release-msvc-win64\"
           if (Test-Path "dist-win64\libusb-1.0.dll") {
             Copy-Item "dist-win64\libusb-1.0.dll" "release-msvc-win64\"
           }
@@ -46,7 +47,7 @@ jobs:
             Copy-Item "dist-win64\drivers\*" "release-msvc-win64\drivers\"
           }
 
-          # Create clean Portable App ZIP (JCast-for-iOS-Portable-v1.5.0.zip)
+          # Create clean Portable App ZIP (JCast-for-iOS-Portable-v1.5.1.zip)
           New-Item -ItemType Directory -Force -Path "build-installer\JCast-for-iOS" | Out-Null
           Copy-Item "release-msvc-win64\JCast for iOS.exe" "build-installer\JCast-for-iOS\"
           Copy-Item "release-msvc-win64\ios_vcam_gui.exe" "build-installer\JCast-for-iOS\"
@@ -56,8 +57,9 @@ jobs:
           Copy-Item "release-msvc-win64\libusb-1.0.dll" "build-installer\JCast-for-iOS\"
           Copy-Item "release-msvc-win64\README.md" "build-installer\JCast-for-iOS\"
           Copy-Item "release-msvc-win64\CHANGELOG.md" "build-installer\JCast-for-iOS\"
+          Copy-Item "release-msvc-win64\THIRD_PARTY_NOTICES.md" "build-installer\JCast-for-iOS\"
           Copy-Item -Recurse "release-msvc-win64\drivers" "build-installer\JCast-for-iOS\drivers"
-          Compress-Archive -Path "build-installer\JCast-for-iOS" -DestinationPath "build-installer\JCast-for-iOS-Portable-v1.5.0.zip" -Force
+          Compress-Archive -Path "build-installer\JCast-for-iOS" -DestinationPath "build-installer\JCast-for-iOS-Portable-v1.5.1.zip" -Force
 
       - name: Build Windows App Setup.exe via Inno Setup 6
         shell: pwsh
@@ -78,46 +80,45 @@ jobs:
           name: jcast-for-ios-app-packages
           path: |
             release-msvc-win64/
-            build-installer/JCast-for-iOS-Setup-v1.5.0.exe
-            build-installer/JCast-for-iOS-Portable-v1.5.0.zip
+            build-installer/JCast-for-iOS-Setup-v1.5.1.exe
+            build-installer/JCast-for-iOS-Portable-v1.5.1.zip
 
-      - name: Publish JCast for iOS Setup.exe & Portable.zip to GitHub Release v1.5.0
+      - name: Publish JCast for iOS Setup.exe & Portable.zip to GitHub Release v1.5.1
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           $notes = @"
-          ## 🚀 JCast for iOS v1.5.0 — Windows 10 / 11 正式版 App 下載
+          ## 🛡️ JCast for iOS v1.5.1 — Windows 系統安全性強化更新
 
-          ### ✨ v1.5.0 重點更新
-          - **串接 GitHub Releases API 內建一鍵軟體自動更新**：
-            - 啟動待機時自動於背景檢查最新版本（絕不干擾擷取傳輸），亦可隨時點擊 **`🔄 檢查更新`** 手動查詢。
-            - 內建原生更新視窗：可直接預覽完整版本更新日誌（Release Notes）、即時顯示下載進度條與 MB 速率，並透過 Windows `BCrypt` 自動驗證 GitHub API 回傳的 **`SHA-256` 數位雜湊值**確保檔案完整無損。
-            - **雙模式智慧升級**：若您使用正式安裝版（`Setup.exe`），下載完成後自動啟動安裝升級精靈；若您使用免安裝便攜版（`Portable.zip`），自動於背景解壓並原地替換升級後重新啟動 App！
-          - 完整包含 v1.4.0 品牌升級 **「JCast for iOS」** 與 **USB 接口速率智慧辨識 × 可選最大解析度分級開放**（傳輸期間嚴格鎖定不變動）。
+          > 💡 **如果您已安裝 `v1.5.0`，現在直接開啟 App 點擊「⬆️ 升級 v1.5.1」即可體驗一鍵自動升級！**
+
+          ### 🔒 v1.5.1 安全性強化重點
+          - **防範 DLL 搜尋順序劫持 (`CWE-427`)**：全模組啟動時強制呼叫 `SetDllDirectoryW("")` 與 `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)`，並改用 `LoadLibraryExW` 鎖定應用程式絕對路徑載入 `libusb-1.0.dll` 與 `ios_vcam_dshow.dll`。
+          - **防範外部執行檔與路徑穿越風險 (`CWE-426` / `CWE-22`)**：更新器鎖定 `System32` 絕對路徑呼叫 PowerShell、強制驗證 `github.com` / `*.githubusercontent.com` 官方 HTTPS 網域白名單與檔名純化。
+          - **啟用完整 Windows 硬體級記憶體防護**：全執行檔開啟 64-bit 高熵位址隨機化 (`/HIGHENTROPYVA` ASLR)、資料執行防止 (`/NXCOMPAT` DEP)、控制流防護 (`/GUARD:CF` CFG) 與硬體堆疊保護 (`/CETCOMPAT` Shadow Stack)。
+          - 新增 `THIRD_PARTY_NOTICES.md` 明確標示第三方開源驅動與元件授權。
 
           ---
 
           ### 📦 下載檔案說明
-          1. **推薦下載：`JCast-for-iOS-Setup-v1.5.0.exe`（正式安裝版 App）**
-             - 雙擊一鍵安裝，自動在**桌面**與**開始選單**建立帶有專屬高解析度圖示的 **「JCast for iOS」** App，並完成虛擬擷取卡與微軟 WHQL 簽章驅動服務部署。
-          2. **免安裝選擇：`JCast-for-iOS-Portable-v1.5.0.zip`（綠色便攜版 App）**
-             - 解壓縮後直接雙擊資料夾內的 **`JCast for iOS.exe`** 即可使用。
+          1. **推薦下載：`JCast-for-iOS-Setup-v1.5.1.exe`（正式安裝版 App）**
+          2. **免安裝選擇：`JCast-for-iOS-Portable-v1.5.1.zip`（綠色便攜版 App）**
           "@
-          gh release view v1.5.0 >$null 2>&1
+          gh release view v1.5.1 >$null 2>&1
           if ($LASTEXITCODE -eq 0) {
-            gh release edit v1.5.0 `
-              --title "JCast for iOS v1.5.0 (GitHub 自動更新 × USB 速率辨識 × 2K+ 原生自適應)" `
+            gh release edit v1.5.1 `
+              --title "JCast for iOS v1.5.1 (Windows 系統安全性強化 + 自動更新)" `
               --notes $notes
-            gh release upload v1.5.0 `
-              "build-installer\JCast-for-iOS-Setup-v1.5.0.exe" `
-              "build-installer\JCast-for-iOS-Portable-v1.5.0.zip" `
+            gh release upload v1.5.1 `
+              "build-installer\JCast-for-iOS-Setup-v1.5.1.exe" `
+              "build-installer\JCast-for-iOS-Portable-v1.5.1.zip" `
               --clobber
           } else {
-            gh release create v1.5.0 `
-              "build-installer\JCast-for-iOS-Setup-v1.5.0.exe" `
-              "build-installer\JCast-for-iOS-Portable-v1.5.0.zip" `
-              --title "JCast for iOS v1.5.0 (GitHub 自動更新 × USB 速率辨識 × 2K+ 原生自適應)" `
+            gh release create v1.5.1 `
+              "build-installer\JCast-for-iOS-Setup-v1.5.1.exe" `
+              "build-installer\JCast-for-iOS-Portable-v1.5.1.zip" `
+              --title "JCast for iOS v1.5.1 (Windows 系統安全性強化 + 自動更新)" `
               --notes $notes
           }
