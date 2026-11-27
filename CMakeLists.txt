@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ios_usb_vcam VERSION 1.2.0 LANGUAGES CXX)
+project(ios_usb_vcam VERSION 1.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -41,14 +41,15 @@ if(MINGW)
 endif()
 add_test(NAME protocol_and_pipeline_tests COMMAND ios_vcam_tests)
 
-# Windows-native targets: DirectShow Virtual Capture Card DLL, Host Daemon, and Safe Filter Driver Setup
+# Windows-native targets: DirectShow Virtual Capture Card DLL, Host Daemon, Driver Setup, and GUI App
 if(WIN32)
-    # 1. DirectShow Video + Audio Virtual Capture Card DLL (Zero external runtime DLL dependencies)
+    # 1. DirectShow Video + Audio Virtual Capture Card DLL
     add_library(ios_vcam_dshow SHARED
         src/dshow/dll_main.cpp
         src/dshow/video_capture_filter.cpp
         src/dshow/audio_capture_filter.cpp
         src/dshow/ios_vcam_dshow.def
+        src/common/binary_version.rc
     )
     target_include_directories(ios_vcam_dshow PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -84,6 +85,7 @@ if(WIN32)
         src/usb/usb_ios_transport.cpp
         src/decoder/mf_h264_decoder.cpp
         src/decoder/wasapi_renderer.cpp
+        src/common/binary_version.rc
     )
     target_include_directories(ios_vcam_host PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -109,6 +111,7 @@ if(WIN32)
     # 3. Safe UpperFilter Driver & DirectShow Registration Tool
     add_executable(ios_vcam_driver_setup
         src/driver_tool/driver_setup_main.cpp
+        src/common/binary_version.rc
     )
     target_include_directories(ios_vcam_driver_setup PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -126,16 +129,15 @@ if(WIN32)
         target_link_options(ios_vcam_driver_setup PRIVATE -static -static-libgcc -static-libstdc++)
     endif()
 
-    # 4. One-Click Graphical Control Center (ios_vcam_gui.exe)
+    # 4. One-Click Graphical App (ios_vcam_gui.exe) with custom App Icon & PerMonitorV2 DPI manifest
+    set(IOS_VCAM_GUI_EXTRA_SRCS src/gui/ios_vcam_gui.rc)
     if(MSVC)
-        set(IOS_VCAM_GUI_MANIFEST src/gui/ios_vcam_gui.manifest)
-    else()
-        set(IOS_VCAM_GUI_MANIFEST src/gui/ios_vcam_gui.rc)
+        list(APPEND IOS_VCAM_GUI_EXTRA_SRCS src/gui/ios_vcam_gui.manifest)
     endif()
     add_executable(ios_vcam_gui WIN32
         src/gui/gui_main.cpp
-        ${IOS_VCAM_GUI_MANIFEST}
         src/decoder/wasapi_renderer.cpp
+        ${IOS_VCAM_GUI_EXTRA_SRCS}
     )
     target_include_directories(ios_vcam_gui PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include

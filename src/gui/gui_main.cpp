@@ -1,3 +1,4 @@
+#include "ios_vcam/app_resource.h"
 #include "ios_vcam/dshow_guids.h"
 #include "ios_vcam/wasapi_renderer.h"
 
@@ -209,18 +210,29 @@ public:
         base_dir_ = AppDir();
         UnblockDownloadedFiles(base_dir_);
 
+        UINT dpi = GetSystemDpiSafe(nullptr);
+        icon_big_ = static_cast<HICON>(LoadImageW(
+            hInst, MAKEINTRESOURCEW(IDI_APP_MAIN_ICON), IMAGE_ICON,
+            GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR));
+        icon_small_ = static_cast<HICON>(LoadImageW(
+            hInst, MAKEINTRESOURCEW(IDI_APP_MAIN_ICON), IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
+        icon_banner_ = static_cast<HICON>(LoadImageW(
+            hInst, MAKEINTRESOURCEW(IDI_APP_MAIN_ICON), IMAGE_ICON,
+            Scale(64, dpi), Scale(64, dpi), LR_DEFAULTCOLOR));
+
         WNDCLASSEXW wc{};
         wc.cbSize = sizeof(wc);
         wc.style = CS_HREDRAW | CS_VREDRAW;
         wc.lpfnWndProc = &ControlCenterWindow::StaticWndProc;
         wc.hInstance = hInst;
-        wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        wc.hIcon = icon_big_ ? icon_big_ : LoadIconW(nullptr, IDI_APPLICATION);
+        wc.hIconSm = icon_small_ ? icon_small_ : wc.hIcon;
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
         wc.lpszClassName = L"IosUsbVcamGuiWndClass";
         RegisterClassExW(&wc);
 
-        UINT dpi = GetSystemDpiSafe(nullptr);
         int win_w = Scale(780, dpi);
         int win_h = Scale(680, dpi);
 
@@ -232,11 +244,14 @@ public:
         hwnd_ = CreateWindowExW(
             0,
             wc.lpszClassName,
-            L"iOS USB 有線虛擬擷取卡 — 一鍵智慧控制台 (支援 2K+ 原生自適應比例)",
+            L"iOS USB 擷取卡 v1.3 — 一鍵智慧控制台 (2K+ 原生自適應比例)",
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
             pos_x, pos_y, win_w, win_h,
             nullptr, nullptr, hInst, this);
         if (!hwnd_) return false;
+
+        if (icon_big_) SendMessageW(hwnd_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(icon_big_));
+        if (icon_small_) SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(icon_small_));
 
         ShowWindow(hwnd_, nCmdShow);
         UpdateWindow(hwnd_);
@@ -609,10 +624,25 @@ private:
         FrameRect(mem_dc, &local_rc, acc_brush);
         DeleteObject(acc_brush);
 
+        int icon_sz = Scale(64, dpi);
+        int right_limit = icon_banner_ ? (w - icon_sz - Scale(26, dpi)) : (w - Scale(12, dpi));
+        if (icon_banner_) {
+            DrawIconEx(
+                mem_dc,
+                w - icon_sz - Scale(16, dpi),
+                (h - icon_sz) / 2,
+                icon_banner_,
+                icon_sz,
+                icon_sz,
+                0,
+                nullptr,
+                DI_NORMAL);
+        }
+
         SetBkMode(mem_dc, TRANSPARENT);
         HGDIOBJ old_font = SelectObject(mem_dc, font_title_);
         SetTextColor(mem_dc, accent_color);
-        RECT title_rc{Scale(18, dpi), Scale(12, dpi), w - Scale(12, dpi), Scale(42, dpi)};
+        RECT title_rc{Scale(18, dpi), Scale(12, dpi), right_limit, Scale(42, dpi)};
         DrawTextW(mem_dc, headline.c_str(), -1, &title_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         SelectObject(mem_dc, font_normal_);
@@ -648,9 +678,9 @@ private:
                 break;
         }
 
-        RECT line1{Scale(20, dpi), Scale(46, dpi), w - Scale(12, dpi), Scale(68, dpi)};
-        RECT line2{Scale(20, dpi), Scale(70, dpi), w - Scale(12, dpi), Scale(92, dpi)};
-        RECT line3{Scale(20, dpi), Scale(94, dpi), w - Scale(12, dpi), Scale(116, dpi)};
+        RECT line1{Scale(20, dpi), Scale(46, dpi), right_limit, Scale(68, dpi)};
+        RECT line2{Scale(20, dpi), Scale(70, dpi), right_limit, Scale(92, dpi)};
+        RECT line3{Scale(20, dpi), Scale(94, dpi), right_limit, Scale(116, dpi)};
         DrawTextW(mem_dc, dshow_txt.c_str(), -1, &line1, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         DrawTextW(mem_dc, usb_drv_txt.c_str(), -1, &line2, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         DrawTextW(mem_dc, phone_txt.c_str(), -1, &line3, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -1054,6 +1084,9 @@ private:
                 if (font_bold_) DeleteObject(font_bold_);
                 if (font_title_) DeleteObject(font_title_);
                 if (font_mono_) DeleteObject(font_mono_);
+                if (icon_big_) DestroyIcon(icon_big_);
+                if (icon_small_) DestroyIcon(icon_small_);
+                if (icon_banner_) DestroyIcon(icon_banner_);
                 PostQuitMessage(0);
                 return 0;
         }
@@ -1064,6 +1097,10 @@ private:
     HWND hwnd_ = nullptr;
     std::filesystem::path base_dir_;
     SystemHealth health_;
+
+    HICON icon_big_ = nullptr;
+    HICON icon_small_ = nullptr;
+    HICON icon_banner_ = nullptr;
 
     RECT banner_rect_{};
     HWND combo_res_mode_ = nullptr;

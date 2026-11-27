@@ -1,4 +1,4 @@
-name: Windows x64 MSVC Build & Test
+name: Windows x64 MSVC App & Installer Build
 
 on:
   push:
@@ -22,11 +22,12 @@ jobs:
       - name: Run protocol & media pipeline unit tests on Windows
         run: .\build-msvc\Release\ios_vcam_tests.exe
 
-      - name: Stage native MSVC release bundle
+      - name: Stage native MSVC App & Portable bundle
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "release-msvc-win64\drivers" | Out-Null
           Copy-Item "build-msvc\Release\ios_vcam_gui.exe" "release-msvc-win64\"
+          Copy-Item "build-msvc\Release\ios_vcam_gui.exe" "release-msvc-win64\iOS USB Capture.exe"
           Copy-Item "build-msvc\Release\ios_vcam_dshow.dll" "release-msvc-win64\"
           Copy-Item "build-msvc\Release\ios_vcam_host.exe" "release-msvc-win64\"
           Copy-Item "build-msvc\Release\ios_vcam_driver_setup.exe" "release-msvc-win64\"
@@ -42,8 +43,37 @@ jobs:
             Copy-Item "dist-win64\drivers\*" "release-msvc-win64\drivers\"
           }
 
-      - name: Upload native MSVC Windows x64 package
+          # Create clean Portable App ZIP
+          New-Item -ItemType Directory -Force -Path "build-installer\iOS-USB-Capture" | Out-Null
+          Copy-Item "release-msvc-win64\iOS USB Capture.exe" "build-installer\iOS-USB-Capture\"
+          Copy-Item "release-msvc-win64\ios_vcam_gui.exe" "build-installer\iOS-USB-Capture\"
+          Copy-Item "release-msvc-win64\ios_vcam_host.exe" "build-installer\iOS-USB-Capture\"
+          Copy-Item "release-msvc-win64\ios_vcam_driver_setup.exe" "build-installer\iOS-USB-Capture\"
+          Copy-Item "release-msvc-win64\ios_vcam_dshow.dll" "build-installer\iOS-USB-Capture\"
+          Copy-Item "release-msvc-win64\libusb-1.0.dll" "build-installer\iOS-USB-Capture\"
+          Copy-Item "release-msvc-win64\README.md" "build-installer\iOS-USB-Capture\"
+          Copy-Item "release-msvc-win64\CHANGELOG.md" "build-installer\iOS-USB-Capture\"
+          Copy-Item -Recurse "release-msvc-win64\drivers" "build-installer\iOS-USB-Capture\drivers"
+          Compress-Archive -Path "build-installer\iOS-USB-Capture" -DestinationPath "build-installer\iOS-USB-Capture-Portable-v1.3.0.zip" -Force
+
+      - name: Build Windows App Setup.exe via Inno Setup 6
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $iscc = "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          & $iscc "installer\ios_usb_capture.iss"
+
+      - name: Upload native MSVC binaries & App Installer packages
         uses: actions/upload-artifact@v4
         with:
-          name: ios-usb-vcam-msvc-win64
-          path: release-msvc-win64/
+          name: ios-usb-vcam-app-packages
+          path: |
+            release-msvc-win64/
+            build-installer/iOS-USB-Capture-Setup-v1.3.0.exe
+            build-installer/iOS-USB-Capture-Portable-v1.3.0.zip

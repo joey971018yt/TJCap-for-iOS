@@ -4,6 +4,18 @@
 
 ---
 
+## [v1.3.0] - 2026-11-26 — 正式版獨立 Windows App 圖示與安裝包封裝
+
+### ✨ 新增功能 (Added)
+- **專屬高解析度多尺寸 App 圖示 (`assets/app_icon.ico`)**：
+  - 內嵌 `16×16` ～ `256×256` 高清圓角玻璃質感專屬圖示與 Windows `VERSIONINFO` 應用程式資訊至主程式、背景服務與 DirectShow 模組，完整顯示於桌面捷徑、工作列、開始選單、視窗標題列與狀態橫幅。
+- **正式版 Windows 安裝程式 (`iOS-USB-Capture-Setup-v1.3.0.exe`)**：
+  - 採用 Inno Setup 6 封裝單一安裝檔：一鍵安裝至 `Program Files`、自動建立桌面與開始選單 **「iOS USB 擷取卡」** App 捷徑、安裝過程自動完成 DirectShow 註冊與簽章驅動服務部署，並整合至 Windows「設定 ➔ 應用程式」支援一鍵乾淨移除。
+- **免安裝綠色便攜版 App (`iOS-USB-Capture-Portable-v1.3.0.zip`)**：
+  - 提供解壓即用的純淨獨立 App 資料夾，直接雙擊帶專屬圖示的 **`iOS USB Capture.exe`** 即可啟動。
+
+---
+
 ## [v1.2.0] - 2026-11-26 — 2K+ 原生畫質與裝置螢幕比例自適應
 
 ### ✨ 新增功能 (Added)
