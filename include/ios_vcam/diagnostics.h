@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ios_vcam/app_lang.h"
+
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -61,8 +63,8 @@ struct ParsedDiagEvent {
     std::string detail_utf8;
 };
 
-// Looks up Traditional Chinese root-cause & step-by-step fix specification for any DiagCode
-const DiagCodeSpec& LookupDiagSpec(DiagCode code);
+// Looks up localized (Traditional Chinese / English) root-cause & step-by-step fix specification for any DiagCode
+const DiagCodeSpec& LookupDiagSpec(DiagCode code, AppLanguage lang = AppLanguage::ZhTW);
 
 // Parses numeric code string such as "E301" or "JCAST-E301" into DiagCode
 DiagCode ParseDiagCodeToken(std::string_view token);
@@ -76,8 +78,8 @@ std::string FormatHostDiagLine(DiagCode code, DiagSeverity sev, std::string_view
 // Parses a line emitted by FormatHostDiagLine (returns true if line starts with "[JCAST-DIAG|")
 bool ParseHostDiagLine(std::string_view line_utf8, ParsedDiagEvent& out_event);
 
-// Translates a Windows process exit code (e.g. 0xC0000005, 0xC0000135) into a clear Chinese explanation
-std::string DescribeProcessExitCode(uint32_t exit_code);
+// Translates a Windows process exit code (e.g. 0xC0000005, 0xC0000135) into a localized explanation
+std::string DescribeProcessExitCode(uint32_t exit_code, AppLanguage lang = AppLanguage::ZhTW);
 
 // Privacy-safe redaction: masks Windows/Unix home directory usernames and iOS device serial/UDID strings
 std::string RedactSensitiveReportText(std::string_view raw_utf8);
@@ -88,6 +90,7 @@ std::string BuildGitHubNewIssueUrl(
     std::string_view repo,
     std::string_view app_version,
     DiagCode primary_code,
-    std::string_view short_summary_utf8);
+    std::string_view short_summary_utf8,
+    AppLanguage lang = AppLanguage::ZhTW);
 
 }  // namespace ios_vcam

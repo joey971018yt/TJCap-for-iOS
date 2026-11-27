@@ -203,6 +203,199 @@ const DiagCodeSpec kSpecs[] = {
     },
 };
 
+const DiagCodeSpec kNoneSpecEn{
+    DiagCode::None,
+    DiagSeverity::Info,
+    "JCAST-OK",
+    "System Operating Normally",
+    "No hardware, driver, or streaming faults have been detected.",
+    "No action required.",
+    false,
+};
+
+const DiagCodeSpec kSpecsEn[] = {
+    {
+        DiagCode::E101_MissingCoreFiles,
+        DiagSeverity::Critical,
+        "JCAST-E101",
+        "Missing Core Executables or Driver Components",
+        "Required files are missing from the app folder (e.g. ios_vcam_host.exe, ios_vcam_dshow.dll, libusb-1.0.dll, or drivers\\libusb0.sys), commonly caused by running directly inside a ZIP archive or antivirus quarantine.",
+        "1. Extract the entire Portable ZIP archive into a normal folder before launching (do not run from inside the ZIP viewer).\n"
+        "2. If quarantined by antivirus software, allow the JCast for iOS folder or reinstall using the official Setup.exe installer.",
+        false,
+    },
+    {
+        DiagCode::E102_MissingAppleService,
+        DiagSeverity::Warning,
+        "JCAST-E102",
+        "Apple Mobile Device Pairing Service Not Detected",
+        "Apple's official USB driver / pairing service is not installed, so iPhone / iPad cannot show the 'Trust This Computer' prompt.",
+        "1. Open Microsoft Store and install the free official 'Apple Devices' app or 'iTunes'.\n"
+        "2. Unplug and reconnect your iPhone / iPad, unlock the screen, and tap 'Trust' with your passcode.",
+        false,
+    },
+    {
+        DiagCode::E103_MissingMediaFoundation,
+        DiagSeverity::Critical,
+        "JCAST-E103",
+        "Windows Media Foundation H.264 Decoder Missing",
+        "mfplat.dll or msmpeg2vdec.dll was not found. This commonly occurs on Windows 10/11 N or KN editions without Media Feature Pack.",
+        "1. Open Windows Settings -> System -> Optional Features -> Add an optional feature.\n"
+        "2. Search for and install 'Media Feature Pack', then reboot your PC.",
+        false,
+    },
+    {
+        DiagCode::E104_DshowNotRegistered,
+        DiagSeverity::Warning,
+        "JCAST-E104",
+        "DirectShow Virtual Capture Card Not Registered or Moved",
+        "The virtual capture card has not been registered yet, or the portable folder was moved after registration.",
+        "1. Click 'Install / Repair Driver' in the main window or this dialog to register the current path as administrator.\n"
+        "2. If OBS Studio is already open, restart OBS to see 'JCast for iOS (Video)' and 'JCast for iOS (Audio)'.",
+        true,
+    },
+    {
+        DiagCode::E201_ZadigDriverConflict,
+        DiagSeverity::Critical,
+        "JCAST-E201",
+        "Apple USB Composite Driver Overwritten by Zadig (WinUSB / libusbK)",
+        "A third-party tool such as Zadig replaced the original Apple Mobile Device USB Composite Device driver, breaking Apple pairing and QuickTime configuration switching.",
+        "1. Open Windows Device Manager -> locate the Apple / WinUSB device -> right-click 'Uninstall device' and check 'Attempt to remove the driver'.\n"
+        "2. Reconnect your iPhone so Windows restores the stock Apple driver, then click 'Install / Repair Driver' here to attach the safe UpperFilter.",
+        false,
+    },
+    {
+        DiagCode::E202_UpperFilterMissing,
+        DiagSeverity::Warning,
+        "JCAST-E202",
+        "libusb0 Safe Filter Not Attached to This iOS Device Yet",
+        "When connecting this iPhone / iPad for the first time, UpperFilters=libusb0 has not been attached to its device node yet.",
+        "1. Keep your device plugged in and click 'Install / Repair Driver' (or 'Smart Start') to attach the non-destructive filter.\n"
+        "2. If access is still denied afterward, unplug and reconnect the USB cable once.",
+        true,
+    },
+    {
+        DiagCode::E203_UsbOpenAccessDenied,
+        DiagSeverity::Error,
+        "JCAST-E203",
+        "Failed to Open iOS USB Device (LIBUSB_ERROR_ACCESS)",
+        "The Apple device was found, but Windows denied opening a low-level USB handle — usually because the device needs one replug right after filter installation.",
+        "1. Unplug the USB cable from your iPhone / iPad, wait 2 seconds, and plug it back in.\n"
+        "2. If it persists, click 'Install / Repair Driver' once to refresh the device node.",
+        true,
+    },
+    {
+        DiagCode::E204_UsbInterfaceBusy,
+        DiagSeverity::Error,
+        "JCAST-E204",
+        "iOS QuickTime Media Interface Is Busy (LIBUSB_ERROR_BUSY)",
+        "Another screen-mirroring app, VM USB passthrough, or leftover ios_vcam_host.exe is currently holding SubClass 0x2A.",
+        "1. Close any other wired iOS mirroring tools or phone manager software.\n"
+        "2. Check Task Manager for leftover ios_vcam_host.exe processes, then replug the USB cable and restart capture.",
+        false,
+    },
+    {
+        DiagCode::E301_IosNotTrustedOrLocked,
+        DiagSeverity::Warning,
+        "JCAST-E301",
+        "Device Not Trusted / Locked or QuickTime Mode Unavailable",
+        "The QuickTime hidden configuration command was sent, but SubClass 0x2A did not appear — usually because the iPhone is locked, 'Trust This Computer' was not tapped, or a charge-only cable is used.",
+        "1. Unlock your iPhone / iPad, keep the screen awake, and tap 'Trust' + enter your passcode when prompted.\n"
+        "2. If no Trust prompt appears, verify 'Apple Devices' / 'iTunes' is installed and use a data-capable USB cable.",
+        false,
+    },
+    {
+        DiagCode::E302_SetConfigFailed,
+        DiagSeverity::Error,
+        "JCAST-E302",
+        "Failed to Switch USB QuickTime Configuration (libusb_set_configuration)",
+        "The USB bus rejected switching to the high-bandwidth media configuration, often due to filter state or an underpowered USB hub.",
+        "1. Click 'Install / Repair Driver' to verify the libusb0 UpperFilter state.\n"
+        "2. Connect directly to a rear motherboard USB 3.0 / USB-C port (avoid unpowered hubs or front-panel extension ports) and replug.",
+        true,
+    },
+    {
+        DiagCode::E303_HandshakeNoFrames,
+        DiagSeverity::Warning,
+        "JCAST-E303",
+        "QuickTime Interface Claimed but Timed Out Waiting for Video Frames",
+        "The QuickTime media channel opened and handshake completed, but no H.264 frames arrived within 8 seconds (often caused by locking the phone mid-handshake or stalled iOS media daemon).",
+        "1. Unlock your iPhone / iPad and swipe the screen.\n"
+        "2. If the screen stays blank, click Stop, unplug and replug the USB cable, then start capture again.",
+        false,
+    },
+    {
+        DiagCode::E304_UsbTransferIoDrop,
+        DiagSeverity::Error,
+        "JCAST-E304",
+        "USB Transfer I/O Drop or Bandwidth Overflow Mid-Stream",
+        "Received LIBUSB_ERROR_IO / PIPE / OVERFLOW / NO_DEVICE during streaming — besides intentional unplugging, this is commonly caused by a loose cable, front-panel voltage drop, or high bitrate on a noisy USB 2.0 port.",
+        "1. Check the Lightning / USB-C connector and plug directly into a rear motherboard USB port.\n"
+        "2. If using a standard USB 2.0 cable with occasional drops, lower the max resolution ceiling to '1080p (1920p)' before starting.",
+        false,
+    },
+    {
+        DiagCode::E401_DecoderInitFailed,
+        DiagSeverity::Critical,
+        "JCAST-E401",
+        "H.264 Video Decoder Initialization Failed",
+        "Both D3D11VA GPU hardware decode and CPU software decode failed to initialize.",
+        "1. Try unchecking 'Enable GPU Hardware Decode (D3D11VA)' in the main window to test CPU software decode.\n"
+        "2. Update your NVIDIA / AMD / Intel GPU driver; on Windows N editions, install Media Feature Pack.",
+        false,
+    },
+    {
+        DiagCode::E402_GpuFallbackToSoftware,
+        DiagSeverity::Warning,
+        "JCAST-E402",
+        "GPU Decode Error — Seamlessly Switched to CPU Software Decode",
+        "D3D11VA experienced a driver reset (TDR) or unsupported format; JCast automatically fell back to CPU software decode to keep your stream live.",
+        "1. Your stream has automatically recovered and remains active.\n"
+        "2. If software decode latency exceeds 14ms at 2K+, consider updating your GPU driver or selecting 1080p max resolution.",
+        false,
+    },
+    {
+        DiagCode::E403_HighDecodeLatency,
+        DiagSeverity::Warning,
+        "JCAST-E403",
+        "High Decode Pipeline Latency (Exceeding 16.7ms 60fps Budget)",
+        "Per-frame decode and scaling latency is high and may cause dropped frames at 60fps — commonly when running 2K+ without GPU hardware decode.",
+        "1. Make sure 'Enable GPU Hardware Decode (D3D11VA)' is checked.\n"
+        "2. On systems without GPU H.264 acceleration, select '1080p (1920p)' or '720p (1280p)' as the resolution ceiling.",
+        false,
+    },
+    {
+        DiagCode::E501_AudioEndpointLost,
+        DiagSeverity::Warning,
+        "JCAST-E501",
+        "PC Audio Monitoring Output Disconnected or Invalidated",
+        "Your headset, USB DAC, or Bluetooth output disconnected mid-stream (AUDCLNT_E_DEVICE_INVALIDATED). Note: OBS 'JCast for iOS (Audio)' is unaffected and continues receiving audio.",
+        "1. If you only need OBS audio capture, you can safely ignore this warning.\n"
+        "2. To restore PC headphone monitoring, reconnect your audio device and restart capture once.",
+        false,
+    },
+    {
+        DiagCode::E502_SharedMemInitFailed,
+        DiagSeverity::Critical,
+        "JCAST-E502",
+        "Failed to Create High-Res Shared Memory (IosUsbVcamSharedMemV2)",
+        "Insufficient Windows virtual memory (pagefile commit charge) or a stale elevated process is locking the shared section.",
+        "1. Close memory-heavy idle apps and verify the Windows paging file is enabled.\n"
+        "2. Restart JCast for iOS and OBS Studio.",
+        false,
+    },
+    {
+        DiagCode::E503_HostUnexpectedExit,
+        DiagSeverity::Critical,
+        "JCAST-E503",
+        "Background Capture Engine (ios_vcam_host.exe) Exited Unexpectedly",
+        "The capture engine terminated prematurely with a non-zero exit code without a manual stop request.",
+        "1. Review the process exit code details and recent events below.\n"
+        "2. Click 'Copy Redacted Report' or 'Report Issue on GitHub' to share the anonymized report for quick troubleshooting.",
+        false,
+    },
+};
+
 std::string ToLowerCopy(std::string_view sv) {
     std::string out(sv);
     for (char& c : out) {
@@ -255,7 +448,15 @@ bool IsHexChar(char c) {
 
 }  // namespace
 
-const DiagCodeSpec& LookupDiagSpec(DiagCode code) {
+const DiagCodeSpec& LookupDiagSpec(DiagCode code, AppLanguage lang) {
+    if (lang == AppLanguage::EnUS) {
+        for (const auto& s : kSpecsEn) {
+            if (s.code == code) {
+                return s;
+            }
+        }
+        return kNoneSpecEn;
+    }
     for (const auto& s : kSpecs) {
         if (s.code == code) {
             return s;
@@ -357,26 +558,32 @@ bool ParseHostDiagLine(std::string_view line_utf8, ParsedDiagEvent& out_event) {
     return true;
 }
 
-std::string DescribeProcessExitCode(uint32_t exit_code) {
+std::string DescribeProcessExitCode(uint32_t exit_code, AppLanguage lang) {
     char hex_buf[32] = {0};
     std::snprintf(hex_buf, sizeof(hex_buf), "0x%08X (%u)", exit_code, exit_code);
     std::string s = hex_buf;
+    const bool en = (lang == AppLanguage::EnUS);
 
     switch (exit_code) {
         case 0U:
-            return s + " — 正常結束";
+            return s + (en ? " — Normal exit" : " — 正常結束");
         case 1U:
-            return s + " — 初始化錯誤（請查看上方對應 JCAST-E 錯誤碼，如缺少檔案、USB 驅動或共享記憶體失敗）";
+            return s + (en ? " — Initialization error (see JCAST-E code above, e.g. missing files, USB driver, or shared memory failure)"
+                           : " — 初始化錯誤（請查看上方對應 JCAST-E 錯誤碼，如缺少檔案、USB 驅動或共享記憶體失敗）");
         case 0xC0000135U:
-            return s + " — STATUS_DLL_NOT_FOUND（系統缺少必要系統 DLL 或未完整解壓縮程式資料夾）";
+            return s + (en ? " — STATUS_DLL_NOT_FOUND (missing required system DLL or incomplete ZIP extraction)"
+                           : " — STATUS_DLL_NOT_FOUND（系統缺少必要系統 DLL 或未完整解壓縮程式資料夾）");
         case 0xC000007BU:
-            return s + " — STATUS_INVALID_IMAGE_FORMAT（32/64 位元 DLL 混用或檔案損毀）";
+            return s + (en ? " — STATUS_INVALID_IMAGE_FORMAT (32/64-bit DLL mismatch or corrupted file)"
+                           : " — STATUS_INVALID_IMAGE_FORMAT（32/64 位元 DLL 混用或檔案損毀）");
         case 0xC0000005U:
-            return s + " — STATUS_ACCESS_VIOLATION（記憶體存取違規，可能為顯示卡驅動或外部元件異常）";
+            return s + (en ? " — STATUS_ACCESS_VIOLATION (memory access violation, possibly GPU driver or external module fault)"
+                           : " — STATUS_ACCESS_VIOLATION（記憶體存取違規，可能為顯示卡驅動或外部元件異常）");
         case 0xC0000409U:
-            return s + " — STATUS_STACK_BUFFER_OVERRUN / FAST_FAIL（安全防護攔截異常狀態）";
+            return s + (en ? " — STATUS_STACK_BUFFER_OVERRUN / FAST_FAIL (security mitigation triggered)"
+                           : " — STATUS_STACK_BUFFER_OVERRUN / FAST_FAIL（安全防護攔截異常狀態）");
         default:
-            return s + " — 非預期結束代碼";
+            return s + (en ? " — Unexpected exit code" : " — 非預期結束代碼");
     }
 }
 
@@ -486,9 +693,11 @@ std::string BuildGitHubNewIssueUrl(
     std::string_view repo,
     std::string_view app_version,
     DiagCode primary_code,
-    std::string_view short_summary_utf8) {
-    const auto& spec = LookupDiagSpec(primary_code);
-    std::string title = "[診斷回報] JCast for iOS v" + std::string(app_version);
+    std::string_view short_summary_utf8,
+    AppLanguage lang) {
+    const bool en = (lang == AppLanguage::EnUS);
+    const auto& spec = LookupDiagSpec(primary_code, lang);
+    std::string title = (en ? "[Bug Report] JCast for iOS v" : "[診斷回報] JCast for iOS v") + std::string(app_version);
     if (primary_code != DiagCode::None) {
         title += " — ";
         title += spec.code_str;
@@ -496,23 +705,44 @@ std::string BuildGitHubNewIssueUrl(
         title += spec.title_utf8;
     }
 
-    std::string body =
-        "### 問題簡述\n"
-        "（請在此補充您遇到的操作情境，例如手機型號、iOS 版本、使用的線材）\n\n"
-        "### 自動偵測摘要\n";
-    body += "- 版本：`v" + std::string(app_version) + "`\n";
-    if (primary_code != DiagCode::None) {
-        body += std::string("- 主要錯誤碼：`") + spec.code_str + "` (" + spec.title_utf8 + ")\n";
+    std::string body;
+    if (en) {
+        body =
+            "### Issue Summary\n"
+            "(Please describe your setup, e.g. iPhone/iPad model, iOS version, USB cable/port)\n\n"
+            "### Auto-Detected Summary\n";
+        body += "- Version: `v" + std::string(app_version) + "`\n";
+        if (primary_code != DiagCode::None) {
+            body += std::string("- Primary Code: `") + spec.code_str + "` (" + spec.title_utf8 + ")\n";
+        }
+        if (!short_summary_utf8.empty()) {
+            body += "- Detail: " + RedactSensitiveReportText(short_summary_utf8) + "\n";
+        }
+        body +=
+            "\n### Full Diagnostic Report (Privacy-Redacted)\n"
+            "> 💡 **Your diagnostic report has been copied to your clipboard. Press `Ctrl + V` below to paste it:**\n\n"
+            "```text\n"
+            "(Press Ctrl+V here to paste your diagnostic report)\n"
+            "```\n";
+    } else {
+        body =
+            "### 問題簡述\n"
+            "（請在此補充您遇到的操作情境，例如手機型號、iOS 版本、使用的線材）\n\n"
+            "### 自動偵測摘要\n";
+        body += "- 版本：`v" + std::string(app_version) + "`\n";
+        if (primary_code != DiagCode::None) {
+            body += std::string("- 主要錯誤碼：`") + spec.code_str + "` (" + spec.title_utf8 + ")\n";
+        }
+        if (!short_summary_utf8.empty()) {
+            body += "- 狀態摘要：" + RedactSensitiveReportText(short_summary_utf8) + "\n";
+        }
+        body +=
+            "\n### 完整系統診斷報告（已自動隱私脫敏）\n"
+            "> 💡 **診斷報告已自動複製到您的剪貼簿，請直接在下方空白處按 `Ctrl + V` 貼上：**\n\n"
+            "```text\n"
+            "（請在此按 Ctrl+V 貼上剪貼簿中的診斷報告）\n"
+            "```\n";
     }
-    if (!short_summary_utf8.empty()) {
-        body += "- 狀態摘要：" + RedactSensitiveReportText(short_summary_utf8) + "\n";
-    }
-    body +=
-        "\n### 完整系統診斷報告（已自動隱私脫敏）\n"
-        "> 💡 **診斷報告已自動複製到您的剪貼簿，請直接在下方空白處按 `Ctrl + V` 貼上：**\n\n"
-        "```text\n"
-        "（請在此按 Ctrl+V 貼上剪貼簿中的診斷報告）\n"
-        "```\n";
 
     std::string url = "https://github.com/";
     url.append(owner.data(), owner.size());

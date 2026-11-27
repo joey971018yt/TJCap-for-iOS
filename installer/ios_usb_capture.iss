@@ -1,8 +1,8 @@
 ﻿[Setup]
 AppId={{8E74A2B1-5C19-4D83-9A41-2F6C8D90E199}
 AppName=JCast for iOS
-AppVersion=1.8.0
-AppVerName=JCast for iOS v1.8.0
+AppVersion=1.9.0
+AppVerName=JCast for iOS v1.9.0
 AppPublisher=JCast Project
 AppPublisherURL=https://github.com/joey971018yt/iOS-usb-cam
 DefaultDirName={autopf}\JCast for iOS
@@ -17,11 +17,11 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 OutputDir=..\build-installer
-OutputBaseFilename=JCast-for-iOS-Setup-v1.8.0
+OutputBaseFilename=JCast-for-iOS-Setup-v1.9.0
 CloseApplications=yes
 
 [Tasks]
-Name: "desktopicon"; Description: "在桌面建立「JCast for iOS」App 捷徑 (&D)"; GroupDescription: "附加捷徑："
+Name: "desktopicon"; Description: "在桌面建立「JCast for iOS」App 捷徑 / Create Desktop Shortcut (&D)"; GroupDescription: "附加捷徑 / Additional Icons:"
 
 [Files]
 Source: "..\release-msvc-win64\JCast for iOS.exe"; DestDir: "{app}"; Flags: ignoreversion

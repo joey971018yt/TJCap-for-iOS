@@ -1,3 +1,4 @@
+#include "ios_vcam/app_lang.h"
 #include "ios_vcam/app_resource.h"
 #include "ios_vcam/app_updater.h"
 #include "ios_vcam/diagnostics.h"
@@ -51,6 +52,7 @@ constexpr int kIdComboAudioOut = 1012;
 constexpr int kIdChkHwDecode = 1013;
 constexpr int kIdChkInlinePreview = 1014;
 constexpr int kIdBtnDiagnostics = 1015;
+constexpr int kIdComboLanguage = 1016;
 constexpr int kIdEditLog = 1020;
 
 constexpr UINT kWmAppendLog = WM_APP + 1;
@@ -103,20 +105,27 @@ struct ResOptionSpec {
     std::wstring cli_args;
 };
 
-std::wstring FormatUsbSpeedBadgeWide(UsbLinkSpeed speed) {
+std::wstring FormatUsbSpeedBadgeWide(UsbLinkSpeed speed, AppLanguage lang) {
+    const bool en = (lang == AppLanguage::EnUS);
     switch (speed) {
         case UsbLinkSpeed::SuperPlus_20Gbps:
-            return L"⚡ USB 3.2 Gen2x2 (20Gbps)｜已解鎖最高 3840p";
+            return en ? L"⚡ USB 3.2 Gen2x2 (20Gbps) | Unlocked up to 3840p"
+                      : L"⚡ USB 3.2 Gen2x2 (20Gbps)｜已解鎖最高 3840p";
         case UsbLinkSpeed::SuperPlus_10Gbps:
-            return L"⚡ USB 3.2 Gen2 (10Gbps)｜已解鎖最高 3840p";
+            return en ? L"⚡ USB 3.2 Gen2 (10Gbps) | Unlocked up to 3840p"
+                      : L"⚡ USB 3.2 Gen2 (10Gbps)｜已解鎖最高 3840p";
         case UsbLinkSpeed::Super_5Gbps:
-            return L"⚡ USB 3.0 (5Gbps)｜已解鎖最高 3840p";
+            return en ? L"⚡ USB 3.0 (5Gbps) | Unlocked up to 3840p"
+                      : L"⚡ USB 3.0 (5Gbps)｜已解鎖最高 3840p";
         case UsbLinkSpeed::High_480Mbps:
-            return L"🔌 USB 2.0 (480Mbps)｜最高可選 2K (2560p)";
+            return en ? L"🔌 USB 2.0 (480Mbps) | Max 2K (2560p)"
+                      : L"🔌 USB 2.0 (480Mbps)｜最高可選 2K (2560p)";
         case UsbLinkSpeed::Full_12Mbps:
-            return L"⚠️ USB 1.1 (12Mbps)｜最高可選 720p (1280p)";
+            return en ? L"⚠️ USB 1.1 (12Mbps) | Max 720p (1280p)"
+                      : L"⚠️ USB 1.1 (12Mbps)｜最高可選 720p (1280p)";
         case UsbLinkSpeed::Low_1_5Mbps:
-            return L"⚠️ USB 1.0 (1.5Mbps)｜最高可選 720p (1280p)";
+            return en ? L"⚠️ USB 1.0 (1.5Mbps) | Max 720p (1280p)"
+                      : L"⚠️ USB 1.0 (1.5Mbps)｜最高可選 720p (1280p)";
         default:
             return L"";
     }
@@ -439,6 +448,7 @@ public:
         std::filesystem::path app_dir,
         const UpdateCheckResult& info,
         UINT dpi,
+        AppLanguage lang,
         HFONT font_normal,
         HFONT font_bold,
         HFONT font_title,
@@ -450,6 +460,7 @@ public:
           app_dir_(std::move(app_dir)),
           info_(info),
           dpi_(dpi),
+          lang_(lang),
           font_normal_(font_normal),
           font_bold_(font_bold),
           font_title_(font_title),
@@ -502,7 +513,9 @@ public:
         int pos_x = prc.left + ((prc.right - prc.left) - dlg_w) / 2;
         int pos_y = prc.top + ((prc.bottom - prc.top) - dlg_h) / 2;
 
-        std::wstring title = L"JCast for iOS — 發現新版本 " + Utf8ToWide(info_.latest.tag_name);
+        std::wstring title =
+            std::wstring(LText(lang_, L"JCast for iOS — 發現新版本 ", L"JCast for iOS — Update Available ")) +
+            Utf8ToWide(info_.latest.tag_name);
         EnableWindow(parent_, FALSE);
 
         dlg_hwnd_ = CreateWindowExW(
@@ -566,6 +579,10 @@ private:
         return MulDiv(px, static_cast<int>(dpi_), 96);
     }
 
+    const wchar_t* T(const wchar_t* zh, const wchar_t* en) const {
+        return LText(lang_, zh, en);
+    }
+
     void BuildDialogControls() {
         RECT rc{};
         GetClientRect(dlg_hwnd_, &rc);
@@ -574,7 +591,8 @@ private:
         int pad = S(16);
         int inner_w = cw - pad * 2;
 
-        std::wstring hdr = L"🎉 發現新版本：" + Utf8ToWide(info_.latest.title);
+        std::wstring hdr = std::wstring(T(L"🎉 發現新版本：", L"🎉 New Release Available: ")) +
+                           Utf8ToWide(info_.latest.title);
         HWND lbl_hdr = CreateWindowExW(
             0, L"STATIC", hdr.c_str(),
             WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS,
@@ -583,14 +601,17 @@ private:
 
         std::wstring pkg_desc;
         if (!target_asset_.browser_download_url.empty()) {
-            pkg_desc = (use_setup_exe_ ? L"安裝版自動升級 (" : L"便攜版原地自動更新 (") +
+            pkg_desc = std::wstring(use_setup_exe_
+                                        ? T(L"安裝版自動升級 (", L"Installer Auto-Upgrade (")
+                                        : T(L"便攜版原地自動更新 (", L"Portable In-Place Auto-Update (")) +
                        Utf8ToWide(target_asset_.name) + L", " + FormatBytesMb(target_asset_.size_bytes) +
-                       (target_asset_.sha256_hex.empty() ? L")" : L", 含 SHA-256 驗證)");
+                       (target_asset_.sha256_hex.empty() ? L")" : T(L", 含 SHA-256 驗證)", L", SHA-256 verified)"));
         } else {
-            pkg_desc = L"請開啟 GitHub Releases 網頁下載更新檔案";
+            pkg_desc = T(L"請開啟 GitHub Releases 網頁下載更新檔案", L"Please open GitHub Releases to download");
         }
-        std::wstring sub = L"目前版本：v" IOS_VCAM_VER_DISPLAY_WSTR L"  ➔  最新版本：" +
-                           Utf8ToWide(info_.latest.tag_name) + L"  ｜  " + pkg_desc;
+        std::wstring sub = std::wstring(T(L"目前版本：v", L"Current: v")) + IOS_VCAM_VER_DISPLAY_WSTR +
+                           T(L"  ➔  最新版本：", L"  ->  Latest: ") +
+                           Utf8ToWide(info_.latest.tag_name) + L"  |  " + pkg_desc;
         HWND lbl_sub = CreateWindowExW(
             0, L"STATIC", sub.c_str(),
             WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS,
@@ -598,7 +619,7 @@ private:
         SendMessageW(lbl_sub, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
 
         HWND lbl_notes = CreateWindowExW(
-            0, L"STATIC", L"版本更新日誌 (GitHub Release Notes)：",
+            0, L"STATIC", T(L"版本更新日誌 (GitHub Release Notes)：", L"Release Notes (GitHub):"),
             WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
             pad, S(72), inner_w, S(20), dlg_hwnd_, nullptr, hinst_, nullptr);
         SendMessageW(lbl_notes, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
@@ -612,7 +633,8 @@ private:
             dlg_hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdDlgEditNotes)), hinst_, nullptr);
         SendMessageW(edit_notes_, WM_SETFONT, reinterpret_cast<WPARAM>(font_mono_), TRUE);
         std::wstring notes_w = info_.latest.body_markdown.empty()
-                                   ? L"（此版本未附帶詳細文字說明，請點擊「開啟 GitHub 發布頁」查看。）"
+                                   ? T(L"（此版本未附帶詳細文字說明，請點擊「開啟 GitHub 發布頁」查看。）",
+                                       L"(No release notes provided. Click 'Open GitHub Release' to view details.)")
                                    : NormalizeLineEndingsCrlf(info_.latest.body_markdown);
         SetWindowTextW(edit_notes_, notes_w.c_str());
 
@@ -626,7 +648,9 @@ private:
         SendMessageW(progress_bar_, PBM_SETPOS, 0, 0);
 
         lbl_status_ = CreateWindowExW(
-            0, L"STATIC", L"準備就緒 — 點擊下方按鈕即可自動從 GitHub 下載並完成升級。",
+            0, L"STATIC",
+            T(L"準備就緒 — 點擊下方按鈕即可自動從 GitHub 下載並完成升級。",
+              L"Ready — Click below to download, verify SHA-256, and install the update."),
             WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS,
             pad, prog_y + S(24), inner_w, S(20), dlg_hwnd_, nullptr, hinst_, nullptr);
         SendMessageW(lbl_status_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
@@ -638,7 +662,7 @@ private:
         int w_can = inner_w - gap * 2 - w_dl - w_web;
 
         btn_download_ = CreateWindowExW(
-            0, L"BUTTON", L"🚀 一鍵下載並自動更新",
+            0, L"BUTTON", T(L"🚀 一鍵下載並自動更新", L"🚀 Download & Auto-Update"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
             pad, btn_y, w_dl, S(36),
             dlg_hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdDlgBtnDownload)), hinst_, nullptr);
@@ -648,14 +672,14 @@ private:
         }
 
         btn_web_ = CreateWindowExW(
-            0, L"BUTTON", L"🌐 開啟 GitHub 發布頁",
+            0, L"BUTTON", T(L"🌐 開啟 GitHub 發布頁", L"🌐 Open GitHub Release"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             pad + w_dl + gap, btn_y, w_web, S(36),
             dlg_hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdDlgBtnOpenWeb)), hinst_, nullptr);
         SendMessageW(btn_web_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
 
         btn_cancel_ = CreateWindowExW(
-            0, L"BUTTON", L"稍後再說",
+            0, L"BUTTON", T(L"稍後再說", L"Later"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             pad + w_dl + gap + w_web + gap, btn_y, w_can, S(36),
             dlg_hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdDlgBtnCancel)), hinst_, nullptr);
@@ -676,9 +700,9 @@ private:
         downloading_ = true;
         cancel_flag_.store(false, std::memory_order_relaxed);
         EnableWindow(btn_download_, FALSE);
-        SetWindowTextW(btn_cancel_, L"取消下載");
+        SetWindowTextW(btn_cancel_, T(L"取消下載", L"Cancel"));
         SendMessageW(progress_bar_, PBM_SETPOS, 0, 0);
-        SetWindowTextW(lbl_status_, L"正在連線至 GitHub Releases 伺服器...");
+        SetWindowTextW(lbl_status_, T(L"正在連線至 GitHub Releases 伺服器...", L"Connecting to GitHub Releases..."));
 
         if (dl_thread_.joinable()) {
             dl_thread_.join();
@@ -687,8 +711,9 @@ private:
         ReleaseAssetInfo asset_copy = target_asset_;
         std::filesystem::path dst_copy = downloaded_file_;
         HWND target_hwnd = dlg_hwnd_;
+        AppLanguage cur_lang = lang_;
 
-        dl_thread_ = std::thread([this, asset_copy, dst_copy, target_hwnd]() {
+        dl_thread_ = std::thread([this, asset_copy, dst_copy, target_hwnd, cur_lang]() {
             std::string err;
             uint64_t last_ui_tick = 0;
             bool ok = DownloadReleaseAssetHttps(
@@ -706,10 +731,12 @@ private:
                     std::wstring msg;
                     if (total > 0) {
                         int pct = permille / 10;
-                        msg = L"正在下載更新包... " + std::to_wstring(pct) + L"% (" +
+                        msg = std::wstring(LText(cur_lang, L"正在下載更新包... ", L"Downloading update... ")) +
+                              std::to_wstring(pct) + L"% (" +
                               FormatBytesMb(done) + L" / " + FormatBytesMb(total) + L")";
                     } else {
-                        msg = L"正在下載更新包... 已接收 " + FormatBytesMb(done);
+                        msg = std::wstring(LText(cur_lang, L"正在下載更新包... 已接收 ", L"Downloading update... Received ")) +
+                              FormatBytesMb(done);
                     }
                     auto* heap_msg = new std::wstring(std::move(msg));
                     if (!PostMessageW(
@@ -738,7 +765,7 @@ private:
             cancel_flag_.store(true, std::memory_order_relaxed);
             close_after_cancel_ = true;
             EnableWindow(btn_cancel_, FALSE);
-            SetWindowTextW(lbl_status_, L"正在取消下載，請稍候...");
+            SetWindowTextW(lbl_status_, T(L"正在取消下載，請稍候...", L"Cancelling download, please wait..."));
         } else {
             modal_done_ = true;
         }
@@ -820,7 +847,10 @@ private:
 
                 if (wParam == 1) {
                     SendMessageW(progress_bar_, PBM_SETPOS, 1000, 0);
-                    SetWindowTextW(lbl_status_, L"✅ 下載與雜湊驗證完成！正在啟動自動升級程序...");
+                    SetWindowTextW(
+                        lbl_status_,
+                        T(L"✅ 下載與雜湊驗證完成！正在啟動自動升級程序...",
+                          L"✅ Download & SHA-256 verified! Launching updater..."));
                     UpdateWindow(dlg_hwnd_);
 
                     if (on_stop_capture_) {
@@ -842,15 +872,19 @@ private:
                     SetWindowTextW(lbl_status_, (L"⚠️ " + w_lerr).c_str());
                     EnableWindow(btn_download_, TRUE);
                     EnableWindow(btn_cancel_, TRUE);
-                    SetWindowTextW(btn_cancel_, L"關閉");
+                    SetWindowTextW(btn_cancel_, T(L"關閉", L"Close"));
                 } else {
-                    std::wstring fail_txt = L"❌ " + (err_msg.empty() ? L"下載失敗" : err_msg);
+                    std::wstring fail_txt = L"❌ " + (err_msg.empty() ? T(L"下載失敗", L"Download failed") : err_msg);
                     SetWindowTextW(lbl_status_, fail_txt.c_str());
                     EnableWindow(btn_download_, TRUE);
                     EnableWindow(btn_cancel_, TRUE);
-                    SetWindowTextW(btn_cancel_, L"關閉");
+                    SetWindowTextW(btn_cancel_, T(L"關閉", L"Close"));
                     if (!cancel_flag_.load(std::memory_order_relaxed)) {
-                        MessageBoxW(dlg_hwnd_, fail_txt.c_str(), L"下載更新失敗", MB_ICONWARNING | MB_OK);
+                        MessageBoxW(
+                            dlg_hwnd_,
+                            fail_txt.c_str(),
+                            T(L"下載更新失敗", L"Update Download Failed"),
+                            MB_ICONWARNING | MB_OK);
                     }
                 }
                 return 0;
@@ -871,6 +905,7 @@ private:
     std::filesystem::path app_dir_;
     UpdateCheckResult info_;
     UINT dpi_ = 96;
+    AppLanguage lang_ = AppLanguage::ZhTW;
 
     HFONT font_normal_ = nullptr;
     HFONT font_bold_ = nullptr;
@@ -905,6 +940,7 @@ public:
         HWND parent,
         std::filesystem::path app_dir,
         UINT dpi,
+        AppLanguage lang,
         HFONT font_normal,
         HFONT font_bold,
         HFONT font_title,
@@ -921,6 +957,7 @@ public:
           parent_(parent),
           app_dir_(std::move(app_dir)),
           dpi_(dpi),
+          lang_(lang),
           font_normal_(font_normal),
           font_bold_(font_bold),
           font_title_(font_title),
@@ -965,7 +1002,8 @@ public:
         hwnd_ = CreateWindowExW(
             WS_EX_DLGMODALFRAME,
             kClassName,
-            L"JCast for iOS — 🩺 智慧故障偵測與一鍵診斷報錯中心",
+            T(L"JCast for iOS — 🩺 智慧故障偵測與一鍵診斷報錯中心",
+              L"JCast for iOS — 🩺 Smart Fault Diagnostics & Bug Report Center"),
             WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
             pos_x,
             pos_y,
@@ -1004,13 +1042,14 @@ private:
     static constexpr int kBtnClose = 4005;
 
     int S(int px) const { return MulDiv(px, static_cast<int>(dpi_), 96); }
+    const wchar_t* T(const wchar_t* zh, const wchar_t* en) const { return LText(lang_, zh, en); }
+    const char* Tu(const char* zh, const char* en) const { return LTextUtf8(lang_, zh, en); }
 
     void RebuildReportAndRefreshUi() {
+        const bool en = (lang_ == AppLanguage::EnUS);
         SystemHealth h = query_health_ ? query_health_() : ProbeSystemHealth(app_dir_);
         primary_code_ = DiagCode::None;
-        int issue_count = 0;
 
-        // Collect live environment codes if present
         std::vector<DiagCode> active_codes;
         auto push_unique_code = [&](DiagCode c) {
             if (c == DiagCode::None) return;
@@ -1022,45 +1061,33 @@ private:
             }
         };
 
-        if (!h.missing_core_files.empty()) {
-            push_unique_code(DiagCode::E101_MissingCoreFiles);
-            ++issue_count;
-        }
-        if (!h.mf_h264_ok) {
-            push_unique_code(DiagCode::E103_MissingMediaFoundation);
-            ++issue_count;
-        }
-        if (!h.apple_service_installed) {
-            push_unique_code(DiagCode::E102_MissingAppleService);
-            ++issue_count;
-        }
-        if (h.dshow != DshowRegState::Ready) {
-            push_unique_code(DiagCode::E104_DshowNotRegistered);
-            ++issue_count;
-        }
+        if (!h.missing_core_files.empty()) push_unique_code(DiagCode::E101_MissingCoreFiles);
+        if (!h.mf_h264_ok) push_unique_code(DiagCode::E103_MissingMediaFoundation);
+        if (!h.apple_service_installed) push_unique_code(DiagCode::E102_MissingAppleService);
+        if (h.dshow != DshowRegState::Ready) push_unique_code(DiagCode::E104_DshowNotRegistered);
         if (h.ios_usb == IosUsbState::PluggedZadigConflict) {
             push_unique_code(DiagCode::E201_ZadigDriverConflict);
-            ++issue_count;
         } else if (h.ios_usb == IosUsbState::PluggedNeedFilter) {
             push_unique_code(DiagCode::E202_UpperFilterMissing);
-            ++issue_count;
         }
 
         for (auto it = faults_.rbegin(); it != faults_.rend(); ++it) {
             push_unique_code(it->code);
         }
-        issue_count += static_cast<int>(faults_.size());
 
         if (lbl_headline_) {
             if (active_codes.empty()) {
                 SetWindowTextW(
                     lbl_headline_,
-                    L"✅ 8 項系統環境自檢正常｜目前未偵測到錯誤碼（若仍遇異常可直接複製報告或前往 GitHub 回報）");
+                    T(L"✅ 8 項系統環境自檢正常｜目前未偵測到錯誤碼（若仍遇異常可直接複製報告或前往 GitHub 回報）",
+                      L"✅ All 8 environment checks passed | No faults detected (you can still copy or file a report)"));
             } else {
-                const auto& pspec = LookupDiagSpec(primary_code_);
-                std::wstring head = L"⚠️ 共偵測到 " + std::to_wstring(active_codes.size()) +
-                                    L" 項異常或提醒｜主要代碼：" + Utf8ToWide(pspec.code_str) + L"（" +
-                                    Utf8ToWide(pspec.title_utf8) + L"）";
+                const auto& pspec = LookupDiagSpec(primary_code_, lang_);
+                std::wstring head =
+                    std::wstring(T(L"⚠️ 共偵測到 ", L"⚠️ Detected ")) +
+                    std::to_wstring(active_codes.size()) +
+                    T(L" 項異常或提醒｜主要代碼：", L" issue(s) | Primary: ") +
+                    Utf8ToWide(pspec.code_str) + L" (" + Utf8ToWide(pspec.title_utf8) + L")";
                 SetWindowTextW(lbl_headline_, head.c_str());
             }
         }
@@ -1069,70 +1096,91 @@ private:
         std::string rpt;
         rpt.reserve(8192);
         rpt += "======================================================================\n";
-        rpt += "  JCast for iOS v" IOS_VCAM_VER_DISPLAY_STR " — 系統環境自檢與故障診斷報錯單\n";
+        rpt += std::string("  JCast for iOS v" IOS_VCAM_VER_DISPLAY_STR) +
+               Tu(" — 系統環境自檢與故障診斷報錯單\n", " — System Self-Check & Fault Diagnostic Report\n");
         rpt += "======================================================================\n\n";
 
-        rpt += "【一、8 項系統環境與硬體全面自檢】\n";
-        rpt += "1. 作業系統環境  : " + (h.os_version_desc.empty() ? "Windows x64" : WideToUtf8Str(h.os_version_desc)) + "\n";
-        rpt += "2. 處理器與記憶體: " + WideToUtf8Str(h.hw_summary_desc) + "\n";
+        rpt += Tu("【一、8 項系統環境與硬體全面自檢】\n", "[1. 8-Point System & Hardware Environment Check]\n");
+        rpt += std::string(Tu("1. 作業系統環境  : ", "1. Operating System : ")) +
+               (h.os_version_desc.empty() ? "Windows x64" : WideToUtf8Str(h.os_version_desc)) + "\n";
+        rpt += std::string(Tu("2. 處理器與記憶體: ", "2. CPU & Memory     : ")) +
+               WideToUtf8Str(h.hw_summary_desc) + "\n";
         if (h.missing_core_files.empty()) {
-            rpt += "3. 核心檔案完整性: [PASS] 5 項核心執行檔、DLL 與簽章驅動皆完整\n";
+            rpt += Tu("3. 核心檔案完整性: [PASS] 5 項核心執行檔、DLL 與簽章驅動皆完整\n",
+                      "3. Core Files       : [PASS] All 5 core binaries, DLLs & signed drivers present\n");
         } else {
-            rpt += "3. 核心檔案完整性: [FAIL] 缺少檔案: ";
+            rpt += Tu("3. 核心檔案完整性: [FAIL] 缺少檔案: ", "3. Core Files       : [FAIL] Missing: ");
             for (size_t i = 0; i < h.missing_core_files.size(); ++i) {
                 if (i > 0) rpt += ", ";
                 rpt += WideToUtf8Str(h.missing_core_files[i]);
             }
             rpt += " (JCAST-E101)\n";
         }
-        rpt += std::string("4. 系統 H.264 元件: ") +
-               (h.mf_h264_ok ? "[PASS] Windows Media Foundation (mfplat / msmpeg2vdec) 正常\n"
-                             : "[FAIL] 缺少 Media Feature Pack H.264 解碼元件 (JCAST-E103)\n");
+        rpt += std::string(Tu("4. 系統 H.264 元件: ", "4. System H.264 MFT : ")) +
+               (h.mf_h264_ok
+                    ? Tu("[PASS] Windows Media Foundation (mfplat / msmpeg2vdec) 正常\n",
+                         "[PASS] Windows Media Foundation (mfplat / msmpeg2vdec) ready\n")
+                    : Tu("[FAIL] 缺少 Media Feature Pack H.264 解碼元件 (JCAST-E103)\n",
+                         "[FAIL] Missing Media Feature Pack H.264 decoder (JCAST-E103)\n"));
         if (h.apple_service_running) {
-            rpt += "5. Apple 配對服務: [PASS] Apple 行動裝置服務與驅動運作中\n";
+            rpt += Tu("5. Apple 配對服務: [PASS] Apple 行動裝置服務與驅動運作中\n",
+                      "5. Apple Pairing    : [PASS] Apple Mobile Device service & driver active\n");
         } else if (h.apple_service_installed) {
-            rpt += "5. Apple 配對服務: [PASS] 已偵測到 Apple USB 驅動元件\n";
+            rpt += Tu("5. Apple 配對服務: [PASS] 已偵測到 Apple USB 驅動元件\n",
+                      "5. Apple Pairing    : [PASS] Apple USB driver components detected\n");
         } else {
-            rpt += "5. Apple 配對服務: [WARN] 未偵測到 Apple 裝置 / iTunes 服務 (JCAST-E102)\n";
+            rpt += Tu("5. Apple 配對服務: [WARN] 未偵測到 Apple 裝置 / iTunes 服務 (JCAST-E102)\n",
+                      "5. Apple Pairing    : [WARN] Apple Devices / iTunes service not detected (JCAST-E102)\n");
         }
-        rpt += std::string("6. WHQL 過濾服務 : ") +
-               (h.libusb_service_ok ? "[PASS] libusb0 核心服務已安裝就緒\n"
-                                    : "[WARN] libusb0 尚未安裝（點「一鍵修復驅動」自動完成）\n");
+        rpt += std::string(Tu("6. WHQL 過濾服務 : ", "6. WHQL Filter Svc  : ")) +
+               (h.libusb_service_ok
+                    ? Tu("[PASS] libusb0 核心服務已安裝就緒\n", "[PASS] libusb0 kernel service installed & ready\n")
+                    : Tu("[WARN] libusb0 尚未安裝（點「一鍵修復驅動」自動完成）\n",
+                         "[WARN] libusb0 not installed yet (click 'Repair Driver' to install)\n"));
         if (h.dshow == DshowRegState::Ready) {
-            rpt += "7. DirectShow 鏡頭: [PASS] JCast for iOS (Video/Audio) 註冊正常\n";
+            rpt += Tu("7. DirectShow 鏡頭: [PASS] JCast for iOS (Video/Audio) 註冊正常\n",
+                      "7. DirectShow Cam   : [PASS] JCast for iOS (Video/Audio) registered\n");
         } else if (h.dshow == DshowRegState::PathMismatch) {
-            rpt += "7. DirectShow 鏡頭: [WARN] 資料夾路徑已變更，需重新註冊 (JCAST-E104)\n";
+            rpt += Tu("7. DirectShow 鏡頭: [WARN] 資料夾路徑已變更，需重新註冊 (JCAST-E104)\n",
+                      "7. DirectShow Cam   : [WARN] App folder moved; re-registration needed (JCAST-E104)\n");
         } else {
-            rpt += "7. DirectShow 鏡頭: [WARN] 尚未註冊虛擬擷取卡 (JCAST-E104)\n";
+            rpt += Tu("7. DirectShow 鏡頭: [WARN] 尚未註冊虛擬擷取卡 (JCAST-E104)\n",
+                      "7. DirectShow Cam   : [WARN] Virtual capture card not registered yet (JCAST-E104)\n");
         }
 
         switch (h.ios_usb) {
             case IosUsbState::PluggedReady:
-                rpt += "8. iOS USB 裝置  : [PASS] 已連線且已掛載 UpperFilter=libusb0 (" +
+                rpt += std::string(Tu("8. iOS USB 裝置  : [PASS] 已連線且已掛載 UpperFilter=libusb0 (",
+                                      "8. iOS USB Device   : [PASS] Connected with UpperFilter=libusb0 (")) +
                        std::string(UsbLinkSpeedName(usb_speed_)) + ")\n";
                 break;
             case IosUsbState::PluggedNeedFilter:
-                rpt += "8. iOS USB 裝置  : [WARN] 已插入手機但尚未掛載 libusb0 過濾層 (JCAST-E202)\n";
+                rpt += Tu("8. iOS USB 裝置  : [WARN] 已插入手機但尚未掛載 libusb0 過濾層 (JCAST-E202)\n",
+                          "8. iOS USB Device   : [WARN] Device plugged in but UpperFilter=libusb0 missing (JCAST-E202)\n");
                 break;
             case IosUsbState::PluggedZadigConflict:
-                rpt += "8. iOS USB 裝置  : [FAIL] 父複合裝置遭 " + WideToUtf8Str(h.ios_service_name) +
-                       " 覆蓋原廠驅動 (JCAST-E201)\n";
+                rpt += std::string(Tu("8. iOS USB 裝置  : [FAIL] 父複合裝置遭 ",
+                                      "8. iOS USB Device   : [FAIL] Composite parent overwritten by ")) +
+                       WideToUtf8Str(h.ios_service_name) +
+                       Tu(" 覆蓋原廠驅動 (JCAST-E201)\n", " instead of Apple driver (JCAST-E201)\n");
                 break;
             case IosUsbState::Unplugged:
-                rpt += "8. iOS USB 裝置  : [INFO] 目前尚未插入 iPhone / iPad USB\n";
+                rpt += Tu("8. iOS USB 裝置  : [INFO] 目前尚未插入 iPhone / iPad USB\n",
+                          "8. iOS USB Device   : [INFO] No iPhone / iPad connected via USB\n");
                 break;
         }
 
-        rpt += "\n【二、偵測到的錯誤碼解析與排除步驟】\n";
+        rpt += Tu("\n【二、偵測到的錯誤碼解析與排除步驟】\n", "\n[2. Detected Error Codes & Troubleshooting Steps]\n");
         if (active_codes.empty()) {
-            rpt += "• 目前未偵測到異常錯誤碼。若您在 OBS 看不到畫面，請確認先點擊本程式「智慧一鍵啟動」再開啟 OBS。\n";
+            rpt += Tu("• 目前未偵測到異常錯誤碼。若您在 OBS 看不到畫面，請確認先點擊本程式「智慧一鍵啟動」再開啟 OBS。\n",
+                      "• No error codes detected. If OBS shows a blank screen, start capture in JCast first, then toggle the OBS source.\n");
         } else {
             for (DiagCode dc : active_codes) {
-                const auto& sp = LookupDiagSpec(dc);
+                const auto& sp = LookupDiagSpec(dc, lang_);
                 rpt += "----------------------------------------------------------------------\n";
                 rpt += std::string("▶ [") + sp.code_str + "] " + sp.title_utf8 + "\n";
-                rpt += std::string("  • 可能原因：") + sp.cause_utf8 + "\n";
-                rpt += "  • 排除步驟：\n";
+                rpt += std::string(Tu("  • 可能原因：", "  • Root Cause: ")) + sp.cause_utf8 + "\n";
+                rpt += Tu("  • 排除步驟：\n", "  • Fix Steps:\n");
                 std::string steps = sp.fix_steps_utf8;
                 size_t pos = 0;
                 while (pos < steps.size()) {
@@ -1147,21 +1195,22 @@ private:
         }
 
         if (!faults_.empty()) {
-            rpt += "\n【三、近期捕捉到的執行期異常事件紀錄】\n";
+            rpt += Tu("\n【三、近期捕捉到的執行期異常事件紀錄】\n", "\n[3. Recent Runtime Diagnostic Events]\n");
             for (const auto& ev : faults_) {
-                const auto& sp = LookupDiagSpec(ev.code);
+                const auto& sp = LookupDiagSpec(ev.code, lang_);
                 rpt += "• [" + WideToUtf8Str(ev.timestamp_str) + "] " + sp.code_str + " — " +
                        WideToUtf8Str(ev.detail_wide) + "\n";
             }
         }
 
-        rpt += "\n【四、即時串流健康度快照】\n";
+        rpt += Tu("\n【四、即時串流健康度快照】\n", "\n[4. Live Stream Health Telemetry Snapshot]\n");
         if (telem_.active && !telem_.waiting_first_frame) {
             char tbuf[256] = {0};
             std::snprintf(
                 tbuf,
                 sizeof(tbuf),
-                "• 狀態: 串流中 (%ux%u) | FPS: %.1f | 碼率: %.1f Mbps (峰值 %.1fM) | 管線延遲: %.1f ms (純解碼 %.1f ms) | 加速: %s | 掉幀: %u\n",
+                en ? "• Status: Streaming (%ux%u) | FPS: %.1f | Bitrate: %.1f Mbps (Peak %.1fM) | Pipeline: %.1f ms (Decode %.1f ms) | Engine: %s | Dropped: %u\n"
+                   : "• 狀態: 串流中 (%ux%u) | FPS: %.1f | 碼率: %.1f Mbps (峰值 %.1fM) | 管線延遲: %.1f ms (純解碼 %.1f ms) | 加速: %s | 掉幀: %u\n",
                 telem_.frame_width,
                 telem_.frame_height,
                 telem_.fps,
@@ -1173,16 +1222,18 @@ private:
                 telem_.dropped_frames);
             rpt += tbuf;
         } else if (telem_.waiting_first_frame) {
-            rpt += "• 狀態: 背景擷取程序已啟動，等待手機傳送首張影格中\n";
+            rpt += Tu("• 狀態: 背景擷取程序已啟動，等待手機傳送首張影格中\n",
+                      "• Status: Capture host running, waiting for first video frame from iOS device\n");
         } else {
-            rpt += "• 狀態: 待機中（未啟動串流）\n";
+            rpt += Tu("• 狀態: 待機中（未啟動串流）\n", "• Status: Idle (not streaming)\n");
         }
 
-        rpt += "\n【五、近期執行日誌摘要（已自動隱私脫敏：隱藏本機帳號與裝置序號）】\n";
+        rpt += Tu("\n【五、近期執行日誌摘要（已自動隱私脫敏：隱藏本機帳號與裝置序號）】\n",
+                  "\n[5. Recent Log Excerpt (Privacy-Redacted: Local User & Serial/UDID Masked)]\n");
         std::string raw_log_u8 = WideToUtf8Str(raw_log_text_);
         if (raw_log_u8.size() > 5500) {
             size_t cut = raw_log_u8.find('\n', raw_log_u8.size() - 5500);
-            raw_log_u8 = "...(前略)...\n" +
+            raw_log_u8 = "...\n" +
                          ((cut != std::string::npos) ? raw_log_u8.substr(cut + 1)
                                                      : raw_log_u8.substr(raw_log_u8.size() - 5500));
         }
@@ -1208,7 +1259,7 @@ private:
         lbl_headline_ = CreateWindowExW(
             0,
             L"STATIC",
-            L"正在執行 8 項系統環境與驅動深度自檢...",
+            T(L"正在執行 8 項系統環境與驅動深度自檢...", L"Running 8-point system and driver self-check..."),
             WS_CHILD | WS_VISIBLE | SS_LEFT,
             pad,
             S(12),
@@ -1223,7 +1274,8 @@ private:
         HWND lbl_sub = CreateWindowExW(
             0,
             L"STATIC",
-            L"🔒 隱私保護：下方診斷報告已自動隱藏您的電腦使用者帳號與手機序號，可安心複製或匯出回報。",
+            T(L"🔒 隱私保護：下方診斷報告已自動隱藏您的電腦使用者帳號與手機序號，可安心複製或匯出回報。",
+              L"🔒 Privacy Safe: Windows usernames and iPhone/iPad serial/UDIDs are automatically redacted below."),
             WS_CHILD | WS_VISIBLE | SS_LEFT,
             pad,
             S(38),
@@ -1260,7 +1312,8 @@ private:
         lbl_feedback_ = CreateWindowExW(
             0,
             L"STATIC",
-            L"提示：遇到問題時可先點「🔧 一鍵修復驅動」，或點「🐞 開啟 GitHub 回報問題」一鍵提交報錯單。",
+            T(L"提示：遇到問題時可先點「🔧 一鍵修復驅動」，或點「🐞 開啟 GitHub 回報問題」一鍵提交報錯單。",
+              L"Tip: Try 'Repair Driver' first, or click 'Report on GitHub' to submit a pre-filled bug report."),
             WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
             pad,
             status_y,
@@ -1282,31 +1335,31 @@ private:
         int x = pad;
 
         HWND b1 = CreateWindowExW(
-            0, L"BUTTON", L"🔧 一鍵修復驅動", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            0, L"BUTTON", T(L"🔧 一鍵修復驅動", L"🔧 Repair Driver"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             x, btn_y, w_rep, btn_h, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kBtnRepair)), hinst_, nullptr);
         SendMessageW(b1, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
         x += w_rep + gap;
 
         HWND b2 = CreateWindowExW(
-            0, L"BUTTON", L"📋 複製脫敏報告", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            0, L"BUTTON", T(L"📋 複製脫敏報告", L"📋 Copy Report"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             x, btn_y, w_cpy, btn_h, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kBtnCopy)), hinst_, nullptr);
         SendMessageW(b2, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
         x += w_cpy + gap;
 
         HWND b3 = CreateWindowExW(
-            0, L"BUTTON", L"💾 匯出報錯檔 (.txt)", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            0, L"BUTTON", T(L"💾 匯出報錯檔 (.txt)", L"💾 Export (.txt)"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             x, btn_y, w_sav, btn_h, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kBtnSaveTxt)), hinst_, nullptr);
         SendMessageW(b3, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
         x += w_sav + gap;
 
         HWND b4 = CreateWindowExW(
-            0, L"BUTTON", L"🐞 開啟 GitHub 回報問題", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+            0, L"BUTTON", T(L"🐞 開啟 GitHub 回報問題", L"🐞 Report on GitHub"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
             x, btn_y, w_gh, btn_h, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kBtnGitHubIssue)), hinst_, nullptr);
         SendMessageW(b4, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
         x += w_gh + gap;
 
         HWND b5 = CreateWindowExW(
-            0, L"BUTTON", L"關閉", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            0, L"BUTTON", T(L"關閉", L"Close"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             x, btn_y, w_cls, btn_h, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kBtnClose)), hinst_, nullptr);
         SendMessageW(b5, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
 
@@ -1335,7 +1388,10 @@ private:
 
         std::ofstream ofs(out_path, std::ios::binary);
         if (!ofs) {
-            SetWindowTextW(lbl_feedback_, L"❌ 無法寫入診斷檔案，請改用「📋 複製脫敏報告」。");
+            SetWindowTextW(
+                lbl_feedback_,
+                T(L"❌ 無法寫入診斷檔案，請改用「📋 複製脫敏報告」。",
+                  L"❌ Could not write report file. Please use 'Copy Report' instead."));
             return;
         }
         const char kBom[3] = {'\xEF', '\xBB', '\xBF'};
@@ -1343,7 +1399,7 @@ private:
         ofs.write(redacted_report_utf8_.data(), static_cast<std::streamsize>(redacted_report_utf8_.size()));
         ofs.close();
 
-        std::wstring msg = L"✅ 已儲存診斷報錯檔：" + out_path.wstring();
+        std::wstring msg = std::wstring(T(L"✅ 已儲存診斷報錯檔：", L"✅ Saved diagnostic report: ")) + out_path.wstring();
         SetWindowTextW(lbl_feedback_, msg.c_str());
         ShellExecuteW(hwnd_, L"open", diag_dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
@@ -1385,13 +1441,19 @@ private:
                             if (on_clear_faults_) on_clear_faults_();
                             faults_.clear();
                             RebuildReportAndRefreshUi();
-                            SetWindowTextW(lbl_feedback_, L"✅ 已完成驅動與虛擬擷取卡修復，並重新整理自檢結果！");
+                            SetWindowTextW(
+                                lbl_feedback_,
+                                T(L"✅ 已完成驅動與虛擬擷取卡修復，並重新整理自檢結果！",
+                                  L"✅ Driver & virtual capture card repaired. Self-check refreshed!"));
                         }
                         return 0;
                     }
                     if (id == kBtnCopy) {
                         if (CopyWideTextToClipboard(hwnd_, redacted_report_wide_)) {
-                            SetWindowTextW(lbl_feedback_, L"✅ 已將完整脫敏診斷報告複製到剪貼簿，可直接 Ctrl+V 貼上！");
+                            SetWindowTextW(
+                                lbl_feedback_,
+                                T(L"✅ 已將完整脫敏診斷報告複製到剪貼簿，可直接 Ctrl+V 貼上！",
+                                  L"✅ Redacted diagnostic report copied to clipboard (ready to Ctrl+V)!"));
                         }
                         return 0;
                     }
@@ -1406,11 +1468,13 @@ private:
                             IOS_VCAM_GITHUB_REPO,
                             IOS_VCAM_VER_DISPLAY_STR,
                             primary_code_,
-                            faults_.empty() ? "" : WideToUtf8Str(faults_.back().detail_wide));
+                            faults_.empty() ? "" : WideToUtf8Str(faults_.back().detail_wide),
+                            lang_);
                         OpenSafeGitHubWebUrl(hwnd_, issue_url);
                         SetWindowTextW(
                             lbl_feedback_,
-                            L"✅ 已複製診斷報告並開啟 GitHub Issue 頁面，請於網頁內文區塊按 Ctrl+V 貼上提交！");
+                            T(L"✅ 已複製診斷報告並開啟 GitHub Issue 頁面，請於網頁內文區塊按 Ctrl+V 貼上提交！",
+                              L"✅ Report copied & GitHub Issue opened! Press Ctrl+V in the issue box to paste."));
                         return 0;
                     }
                     if (id == kBtnClose || id == IDCANCEL) {
@@ -1435,6 +1499,7 @@ private:
     HWND hwnd_ = nullptr;
     std::filesystem::path app_dir_;
     UINT dpi_ = 96;
+    AppLanguage lang_ = AppLanguage::ZhTW;
     HFONT font_normal_ = nullptr;
     HFONT font_bold_ = nullptr;
     HFONT font_title_ = nullptr;
@@ -1473,22 +1538,26 @@ std::wstring FormatBytesCompactWide(uint64_t bytes) {
     return buf;
 }
 
-std::wstring FormatLiveMonitorHudBadge(const StreamHealthSnapshot& s) {
+std::wstring FormatLiveMonitorHudBadge(const StreamHealthSnapshot& s, AppLanguage lang) {
     if (!s.active || s.waiting_first_frame) {
         return L"";
     }
-    const wchar_t* grade_lbl = L"🟢 極佳";
+    const bool en = (lang == AppLanguage::EnUS);
+    const wchar_t* grade_lbl = en ? L"🟢 Optimal" : L"🟢 極佳";
     if (s.grade == StreamHealthGrade::StaticVfr) {
-        grade_lbl = L"🔵 靜態VFR";
+        grade_lbl = en ? L"🔵 Static VFR" : L"🔵 靜態VFR";
     } else if (s.grade == StreamHealthGrade::Warning) {
-        grade_lbl = L"🟡 負載偏高";
+        grade_lbl = en ? L"🟡 High Load" : L"🟡 負載偏高";
     }
-    const wchar_t* dec_lbl = s.mock_source ? L"自測" : (s.hw_accelerated ? L"D3D11VA" : L"CPU軟解");
+    const wchar_t* dec_lbl = s.mock_source
+                                 ? (en ? L"Mock" : L"自測")
+                                 : (s.hw_accelerated ? L"D3D11VA" : (en ? L"CPU SW" : L"CPU軟解"));
     wchar_t buf[192] = {0};
     std::swprintf(
         buf,
         192,
-        L"%ls ｜ %.1f FPS ｜ %.1f Mbps ｜ 延遲 %.1f ms (%ls) ｜ %u×%u",
+        en ? L"%ls | %.1f FPS | %.1f Mbps | Latency %.1f ms (%ls) | %u×%u"
+           : L"%ls ｜ %.1f FPS ｜ %.1f Mbps ｜ 延遲 %.1f ms (%ls) ｜ %u×%u",
         grade_lbl,
         s.fps,
         s.bitrate_mbps,
@@ -1648,6 +1717,7 @@ public:
         HICON icon_small,
         HFONT font_bold,
         HFONT font_normal,
+        AppLanguage lang,
         std::function<void(HWND)> on_screenshot,
         std::function<void()> on_open_folder)
         : hinst_(hinst),
@@ -1655,6 +1725,7 @@ public:
           icon_small_(icon_small),
           font_bold_(font_bold),
           font_normal_(font_normal),
+          lang_(lang),
           on_screenshot_(std::move(on_screenshot)),
           on_open_folder_(std::move(on_open_folder)) {}
 
@@ -1668,6 +1739,18 @@ public:
 
     HWND Hwnd() const { return hwnd_; }
     bool IsOpen() const { return hwnd_ != nullptr && IsWindow(hwnd_); }
+
+    void SetLanguage(AppLanguage lang) {
+        lang_ = lang;
+        if (IsOpen()) {
+            last_title_.clear();
+            UpdateTitleBar();
+            if (show_hud_) {
+                hud_text_ = FormatLiveMonitorHudBadge(hud_snap_, lang_);
+            }
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+    }
 
     void ShowToast(const std::wstring& text, uint64_t duration_ms = 2200) {
         toast_text_ = text;
@@ -1741,7 +1824,8 @@ public:
         hwnd_ = CreateWindowExW(
             0,
             kCls,
-            L"JCast Live Monitor — 獨立外接螢幕視窗 [雙擊 / F11: 全螢幕 ｜ F12: 原畫質截圖 ｜ 右鍵: 選單]",
+            T(L"JCast Live Monitor — 獨立外接螢幕視窗 [雙擊 / F11: 全螢幕 ｜ F12: 原畫質截圖 ｜ 右鍵: 選單]",
+              L"JCast Live Monitor — Standalone Display [DblClick / F11: Fullscreen | F12: Screenshot | Right-Click: Menu]"),
             style,
             pos_x,
             pos_y,
@@ -1784,14 +1868,17 @@ private:
     static constexpr int kCmdClose = 3006;
     static constexpr int kCmdToggleHud = 3007;
 
+    const wchar_t* T(const wchar_t* zh, const wchar_t* en) const { return LText(lang_, zh, en); }
+
     void UpdateTitleBar() {
         if (!hwnd_ || fullscreen_) return;
         std::wstring t = L"JCast Live Monitor";
         if (has_live_frame_ && src_w_ > 0 && src_h_ > 0) {
             t += L" (" + std::to_wstring(src_w_) + L"×" + std::to_wstring(src_h_) + L")";
         }
-        if (topmost_) t += L" [📌置頂]";
-        t += L" — F11: 全螢幕 ｜ Tab/F3: 健康度HUD ｜ F12: 原畫質截圖 ｜ 右鍵: 選單";
+        if (topmost_) t += T(L" [📌置頂]", L" [📌On Top]");
+        t += T(L" — F11: 全螢幕 ｜ Tab/F3: 健康度HUD ｜ F12: 原畫質截圖 ｜ 右鍵: 選單",
+               L" — F11: Fullscreen | Tab/F3: Health HUD | F12: Screenshot | Right-Click: Menu");
         if (t != last_title_) {
             last_title_ = t;
             SetWindowTextW(hwnd_, t.c_str());
@@ -1819,7 +1906,10 @@ private:
                     SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
                 fullscreen_ = true;
                 force_refresh_ = true;
-                ShowToast(L"⛶ 已進入無邊框全螢幕（按 Esc 退出｜按 Tab 切換健康度 HUD）", 2000);
+                ShowToast(
+                    T(L"⛶ 已進入無邊框全螢幕（按 Esc 退出｜按 Tab 切換健康度 HUD）",
+                      L"⛶ Borderless Fullscreen (Esc to exit | Tab to toggle Health HUD)"),
+                    2000);
             }
         } else {
             SetWindowLongPtrW(hwnd_, GWL_STYLE, style_prev_);
@@ -1851,22 +1941,31 @@ private:
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         UpdateTitleBar();
-        ShowToast(topmost_ ? L"📌 已開啟視窗永遠置頂" : L"📌 已取消視窗置頂", 1600);
+        ShowToast(
+            topmost_ ? T(L"📌 已開啟視窗永遠置頂", L"📌 Always on Top enabled")
+                     : T(L"📌 已取消視窗置頂", L"📌 Always on Top disabled"),
+            1600);
     }
 
     void ToggleHud() {
         show_hud_ = !show_hud_;
         if (show_hud_) {
             shm_.ReadStreamHealth(hud_snap_);
-            hud_text_ = FormatLiveMonitorHudBadge(hud_snap_);
+            hud_text_ = FormatLiveMonitorHudBadge(hud_snap_, lang_);
             if (hud_text_.empty()) {
-                ShowToast(L"📊 已開啟串流健康度 HUD（待投影訊號開始即顯示 FPS / Mbps / ms）", 1800);
+                ShowToast(
+                    T(L"📊 已開啟串流健康度 HUD（待投影訊號開始即顯示 FPS / Mbps / ms）",
+                      L"📊 Health HUD enabled (FPS / Mbps / ms will appear when live)"),
+                    1800);
             } else {
                 InvalidateRect(hwnd_, nullptr, FALSE);
             }
         } else {
             hud_text_.clear();
-            ShowToast(L"📊 已隱藏串流健康度 HUD（按 Tab 或 F3 可重新顯示）", 1600);
+            ShowToast(
+                T(L"📊 已隱藏串流健康度 HUD（按 Tab 或 F3 可重新顯示）",
+                  L"📊 Health HUD hidden (press Tab or F3 to show)"),
+                1600);
         }
     }
 
@@ -1908,23 +2007,41 @@ private:
     void ShowContextMenu(int screen_x, int screen_y) {
         HMENU menu = CreatePopupMenu();
         if (!menu) return;
-        AppendMenuW(menu, MF_STRING, kCmdShot, L"📸 一鍵原畫質無損截圖 (PNG + 複製剪貼簿)\tF12 / Ctrl+S");
-        AppendMenuW(menu, MF_STRING, kCmdOpenDir, L"📂 開啟截圖儲存資料夾");
+        AppendMenuW(
+            menu,
+            MF_STRING,
+            kCmdShot,
+            T(L"📸 一鍵原畫質無損截圖 (PNG + 複製剪貼簿)\tF12 / Ctrl+S",
+              L"📸 Lossless 1:1 Screenshot (PNG + Clipboard)\tF12 / Ctrl+S"));
+        AppendMenuW(
+            menu,
+            MF_STRING,
+            kCmdOpenDir,
+            T(L"📂 開啟截圖儲存資料夾", L"📂 Open Screenshots Folder"));
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(
             menu,
             MF_STRING | (show_hud_ ? MF_CHECKED : 0),
             kCmdToggleHud,
-            L"📊 顯示即時串流健康度 HUD (FPS / Mbps / 延遲 ms)\tTab / F3");
-        AppendMenuW(menu, MF_STRING | (fullscreen_ ? MF_CHECKED : 0), kCmdFullscreen, L"⛶ 無邊框全螢幕模式\tF11 / 雙擊");
-        AppendMenuW(menu, MF_STRING | (topmost_ ? MF_CHECKED : 0), kCmdTopmost, L"📌 視窗永遠置頂 (Always on Top)\tCtrl+T");
+            T(L"📊 顯示即時串流健康度 HUD (FPS / Mbps / 延遲 ms)\tTab / F3",
+              L"📊 Show Stream Health HUD (FPS / Mbps / Latency)\tTab / F3"));
+        AppendMenuW(
+            menu,
+            MF_STRING | (fullscreen_ ? MF_CHECKED : 0),
+            kCmdFullscreen,
+            T(L"⛶ 無邊框全螢幕模式\tF11 / 雙擊", L"⛶ Borderless Fullscreen\tF11 / DblClick"));
+        AppendMenuW(
+            menu,
+            MF_STRING | (topmost_ ? MF_CHECKED : 0),
+            kCmdTopmost,
+            T(L"📌 視窗永遠置頂 (Always on Top)\tCtrl+T", L"📌 Always on Top\tCtrl+T"));
         AppendMenuW(
             menu,
             MF_STRING | ((has_live_frame_ && src_w_ > 0) ? 0 : MF_GRAYED),
             kCmdFitAspect,
-            L"📐 依手機原生比例自動貼合視窗大小");
+            T(L"📐 依手機原生比例自動貼合視窗大小", L"📐 Fit Window to Device Aspect Ratio"));
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(menu, MF_STRING, kCmdClose, L"關閉獨立預覽視窗");
+        AppendMenuW(menu, MF_STRING, kCmdClose, T(L"關閉獨立預覽視窗", L"Close Live Monitor"));
 
         if (screen_x == -1 && screen_y == -1) {
             POINT pt{40, 40};
@@ -1973,7 +2090,7 @@ private:
         if (show_hud_ && (force || now_tick >= next_hud_sample_ms_)) {
             next_hud_sample_ms_ = now_tick + 450ULL;
             shm_.ReadStreamHealth(hud_snap_);
-            std::wstring next_hud = FormatLiveMonitorHudBadge(hud_snap_);
+            std::wstring next_hud = FormatLiveMonitorHudBadge(hud_snap_, lang_);
             if (next_hud != hud_text_) {
                 hud_text_ = std::move(next_hud);
                 hud_changed = true;
@@ -2055,8 +2172,9 @@ private:
                     false,
                     badge,
                     is_toast,
-                    L"📺 等待 iPhone / iPad 投影訊號中...",
-                    L"於主控制台點擊「🚀 智慧一鍵啟動」後即顯示高畫質畫面（F11 全螢幕｜Tab 健康度 HUD｜F12 原畫質截圖）",
+                    T(L"📺 等待 iPhone / iPad 投影訊號中...", L"📺 Waiting for iPhone / iPad Video Signal..."),
+                    T(L"於主控制台點擊「🚀 智慧一鍵啟動」後即顯示高畫質畫面（F11 全螢幕｜Tab 健康度 HUD｜F12 原畫質截圖）",
+                      L"Click 'Smart Start' in the main window to begin (F11 Fullscreen | Tab Health HUD | F12 Screenshot)"),
                     font_bold_,
                     font_normal_);
                 EndPaint(hwnd_, &ps);
@@ -2149,6 +2267,7 @@ private:
     HICON icon_small_ = nullptr;
     HFONT font_bold_ = nullptr;
     HFONT font_normal_ = nullptr;
+    AppLanguage lang_ = AppLanguage::ZhTW;
     HBRUSH dark_bg_brush_ = nullptr;
 
     std::function<void(HWND)> on_screenshot_;
@@ -2190,6 +2309,9 @@ public:
         UnblockDownloadedFiles(base_dir_);
         CleanupOldPortableUpdateFiles(base_dir_);
 
+        lang_pref_ = LoadSavedLanguagePref();
+        lang_ = ResolveEffectiveLanguage(lang_pref_, static_cast<uint16_t>(GetUserDefaultUILanguage()));
+
         UINT dpi = GetSystemDpiSafe(nullptr);
         icon_big_ = static_cast<HICON>(LoadImageW(
             hInst, MAKEINTRESOURCEW(IDI_APP_MAIN_ICON), IMAGE_ICON,
@@ -2218,14 +2340,15 @@ public:
         int work_w = std::max<int>(640, work.right - work.left);
         int work_h = std::max<int>(560, work.bottom - work.top);
         int win_w = std::min<int>(Scale(820, dpi), work_w);
-        int win_h = std::min<int>(Scale(756, dpi), work_h);
+        int win_h = std::min<int>(Scale(760, dpi), work_h);
         int pos_x = work.left + (work_w - win_w) / 2;
         int pos_y = std::max<int>(work.top, work.top + (work_h - win_h) / 2);
 
         hwnd_ = CreateWindowExW(
             0,
             wc.lpszClassName,
-            L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — 智慧擷取控制台 (故障偵測報錯 × 健康度儀表板 × 即時預覽)",
+            T(L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — 智慧擷取控制台 (故障偵測報錯 × 健康度儀表板 × 即時預覽)",
+              L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — Smart Capture Console (Diagnostics × Health Telemetry × Live Preview)"),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
             pos_x, pos_y, win_w, win_h,
             nullptr, nullptr, hInst, this);
@@ -2240,6 +2363,10 @@ public:
     }
 
 private:
+    const wchar_t* T(const wchar_t* zh, const wchar_t* en) const {
+        return LText(lang_, zh, en);
+    }
+
     static UINT GetSystemDpiSafe(HWND hwnd) {
         using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
         using GetDpiForSystemFn = UINT(WINAPI*)();
@@ -2292,6 +2419,44 @@ private:
         font_small_ = make_font(85, FW_NORMAL, L"Microsoft JhengHei UI");
     }
 
+    void PopulateLanguageCombo() {
+        if (!combo_language_) return;
+        SendMessageW(combo_language_, CB_RESETCONTENT, 0, 0);
+        SendMessageW(
+            combo_language_,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(T(L"🌐 自動 (跟隨系統)", L"🌐 Auto (System)")));
+        SendMessageW(combo_language_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"繁體中文"));
+        SendMessageW(combo_language_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"English"));
+        int sel = 0;
+        if (lang_pref_ == AppLanguagePref::ZhTW) sel = 1;
+        else if (lang_pref_ == AppLanguagePref::EnUS) sel = 2;
+        SendMessageW(combo_language_, CB_SETCURSEL, sel, 0);
+    }
+
+    void PopulateStatusBarCombo(bool preserve_selection) {
+        if (!combo_status_bar_) return;
+        LRESULT prev_sel = preserve_selection ? SendMessageW(combo_status_bar_, CB_GETCURSEL, 0, 0) : 0;
+        if (prev_sel < 0 || prev_sel > 1) prev_sel = 0;
+        SendMessageW(combo_status_bar_, CB_RESETCONTENT, 0, 0);
+        SendMessageW(
+            combo_status_bar_,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(T(
+                L"乾淨直播狀態列（推薦：時間固定 9:41、滿格電量與訊號）",
+                L"Clean Streaming Status Bar (Recommended: 9:41, Full Battery & Signal)")));
+        SendMessageW(
+            combo_status_bar_,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(T(
+                L"保留手機真實狀態列（顯示真實時間、電量與通知圖示）",
+                L"Keep Native Device Status Bar (Real Time, Battery & Notifications)")));
+        SendMessageW(combo_status_bar_, CB_SETCURSEL, static_cast<WPARAM>(prev_sel), 0);
+    }
+
     void BuildControls() {
         UINT dpi = GetSystemDpiSafe(hwnd_);
         CreateFonts(dpi);
@@ -2305,25 +2470,30 @@ private:
         // Top banner: y = 10 .. 130
         banner_rect_ = {margin, Scale(10, dpi), cw - margin, Scale(130, dpi)};
 
-        // Group 1: Preferences (y = 138 .. 290)
+        // Group 1: Preferences (y = 138 .. 294)
         int grp1_y = Scale(138, dpi);
-        int grp1_h = Scale(152, dpi);
-        HWND grp_pref = CreateWindowExW(
-            0, L"BUTTON", L"擷取畫質上限（依 USB 速率自動開放選項）、比例與音訊設定",
+        int grp1_h = Scale(156, dpi);
+        grp_pref_ = CreateWindowExW(
+            0,
+            L"BUTTON",
+            T(L"擷取畫質上限（依 USB 速率自動開放選項）、音訊與語言設定",
+              L"Capture Resolution Ceiling (Auto-Gated by USB Speed), Audio & Language"),
             WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
             margin, grp1_y, content_w, grp1_h, hwnd_, nullptr, hinst_, nullptr);
-        SendMessageW(grp_pref, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
+        SendMessageW(grp_pref_, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
 
         int lbl_w = Scale(158, dpi);
         int combo_w = content_w - lbl_w - Scale(28, dpi);
 
         // Row 0: Max Selectable Resolution & Adaptive Aspect Ratio
         int row0_y = grp1_y + Scale(26, dpi);
-        HWND lbl_res = CreateWindowExW(
-            0, L"STATIC", L"最大解析度與比例選項：",
+        lbl_res_ = CreateWindowExW(
+            0,
+            L"STATIC",
+            T(L"最大解析度與比例選項：", L"Max Resolution & Aspect:"),
             WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
             margin + Scale(14, dpi), row0_y, lbl_w, Scale(26, dpi), hwnd_, nullptr, hinst_, nullptr);
-        SendMessageW(lbl_res, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+        SendMessageW(lbl_res_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
 
         combo_res_mode_ = CreateWindowExW(
             0, L"COMBOBOX", L"",
@@ -2331,15 +2501,17 @@ private:
             margin + Scale(14, dpi) + lbl_w, row0_y, combo_w, Scale(240, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdComboResMode)), hinst_, nullptr);
         SendMessageW(combo_res_mode_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
-        PopulateResolutionOptionsForSpeed(UsbLinkSpeed::Unknown, true);
+        PopulateResolutionOptionsForSpeed(UsbLinkSpeed::Unknown, true, false);
 
         // Row 1: Status bar style
         int row1_y = grp1_y + Scale(58, dpi);
-        HWND lbl_bar = CreateWindowExW(
-            0, L"STATIC", L"手機頂部狀態列樣式：",
+        lbl_bar_ = CreateWindowExW(
+            0,
+            L"STATIC",
+            T(L"手機頂部狀態列樣式：", L"iOS Status Bar Style:"),
             WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
             margin + Scale(14, dpi), row1_y, lbl_w, Scale(26, dpi), hwnd_, nullptr, hinst_, nullptr);
-        SendMessageW(lbl_bar, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+        SendMessageW(lbl_bar_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
 
         combo_status_bar_ = CreateWindowExW(
             0, L"COMBOBOX", L"",
@@ -2347,19 +2519,17 @@ private:
             margin + Scale(14, dpi) + lbl_w, row1_y, combo_w, Scale(200, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdComboStatusBar)), hinst_, nullptr);
         SendMessageW(combo_status_bar_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
-        SendMessageW(combo_status_bar_, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"乾淨直播狀態列（推薦：時間固定 9:41、滿格電量與訊號）"));
-        SendMessageW(combo_status_bar_, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"保留手機真實狀態列（顯示真實時間、電量與通知圖示）"));
-        SendMessageW(combo_status_bar_, CB_SETCURSEL, 0, 0);
+        PopulateStatusBarCombo(false);
 
         // Row 2: PC Audio Routing / Monitoring
         int row2_y = grp1_y + Scale(90, dpi);
-        HWND lbl_aud = CreateWindowExW(
-            0, L"STATIC", L"電腦端音訊監聽／轉發：",
+        lbl_aud_ = CreateWindowExW(
+            0,
+            L"STATIC",
+            T(L"電腦端音訊監聽／轉發：", L"PC Audio Monitoring:"),
             WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
             margin + Scale(14, dpi), row2_y, lbl_w, Scale(26, dpi), hwnd_, nullptr, hinst_, nullptr);
-        SendMessageW(lbl_aud, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+        SendMessageW(lbl_aud_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
 
         combo_audio_ = CreateWindowExW(
             0, L"COMBOBOX", L"",
@@ -2367,32 +2537,65 @@ private:
             margin + Scale(14, dpi) + lbl_w, row2_y, combo_w, Scale(240, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdComboAudioOut)), hinst_, nullptr);
         SendMessageW(combo_audio_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
-        PopulateAudioEndpoints();
+        PopulateAudioEndpoints(false);
 
-        // Row 3: GPU Hardware Decode
+        // Row 3: Left = GPU Hardware Decode | Right = Interface Language Selector
         int row3_y = grp1_y + Scale(122, dpi);
+        int inner_pref_w = content_w - Scale(28, dpi);
+        int lang_combo_w = Scale(166, dpi);
+        int lang_lbl_w = Scale(126, dpi);
+        int lang_gap = Scale(6, dpi);
+        int chk_w = std::max(Scale(200, dpi), inner_pref_w - lang_combo_w - lang_lbl_w - lang_gap - Scale(10, dpi));
+
         chk_hw_decode_ = CreateWindowExW(
-            0, L"BUTTON", L"啟用 GPU 硬體超低延遲解碼 (D3D11VA，2K+60fps 建議保持開啟)",
+            0,
+            L"BUTTON",
+            T(L"啟用 GPU 硬體超低延遲解碼 (D3D11VA，建議開啟)",
+              L"Enable GPU Hardware Decode (D3D11VA, recommended)"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-            margin + Scale(14, dpi), row3_y, content_w - Scale(28, dpi), Scale(22, dpi),
+            margin + Scale(14, dpi), row3_y + Scale(1, dpi), chk_w, Scale(24, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdChkHwDecode)), hinst_, nullptr);
         SendMessageW(chk_hw_decode_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
         SendMessageW(chk_hw_decode_, BM_SETCHECK, BST_CHECKED, 0);
 
-        // Group 2: One-Click Action Buttons (y = 298 .. 412)
-        int grp2_y = Scale(298, dpi);
+        int lang_combo_x = (margin + Scale(14, dpi) + inner_pref_w) - lang_combo_w;
+        int lang_lbl_x = lang_combo_x - lang_gap - lang_lbl_w;
+        lbl_lang_ = CreateWindowExW(
+            0,
+            L"STATIC",
+            L"🌐 語言 / Language:",
+            WS_CHILD | WS_VISIBLE | SS_RIGHT | SS_CENTERIMAGE,
+            lang_lbl_x, row3_y + Scale(1, dpi), lang_lbl_w, Scale(24, dpi),
+            hwnd_, nullptr, hinst_, nullptr);
+        SendMessageW(lbl_lang_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+
+        combo_language_ = CreateWindowExW(
+            0, L"COMBOBOX", L"",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+            lang_combo_x, row3_y, lang_combo_w, Scale(160, dpi),
+            hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdComboLanguage)), hinst_, nullptr);
+        SendMessageW(combo_language_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+        PopulateLanguageCombo();
+
+        // Group 2: One-Click Action Buttons (y = 302 .. 416)
+        int grp2_y = Scale(302, dpi);
         int grp2_h = Scale(114, dpi);
-        HWND grp_act = CreateWindowExW(
-            0, L"BUTTON", L"一鍵自動化操作",
+        grp_act_ = CreateWindowExW(
+            0,
+            L"BUTTON",
+            T(L"一鍵自動化操作", L"One-Click Actions"),
             WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
             margin, grp2_y, content_w, grp2_h, hwnd_, nullptr, hinst_, nullptr);
-        SendMessageW(grp_act, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
+        SendMessageW(grp_act_, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
 
         int btn_pad = Scale(14, dpi);
         int inner_w = content_w - btn_pad * 2;
         int main_btn_y = grp2_y + Scale(24, dpi);
         btn_smart_start_ = CreateWindowExW(
-            0, L"BUTTON", L"🚀 智慧一鍵啟動（自動檢查安裝驅動 ➔ 開始 2K+ 原生投影）",
+            0,
+            L"BUTTON",
+            T(L"🚀 智慧一鍵啟動（自動檢查安裝驅動 ➔ 開始 2K+ 原生投影）",
+              L"🚀 Smart Start (Auto-Verify Drivers -> Begin 2K+ Native Capture)"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             margin + btn_pad, main_btn_y, inner_w, Scale(40, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnSmartStart)), hinst_, nullptr);
@@ -2410,7 +2613,7 @@ private:
 
         int cur_x = margin + btn_pad;
         btn_mock_ = CreateWindowExW(
-            0, L"BUTTON", L"🧪 免手機自測",
+            0, L"BUTTON", T(L"🧪 免手機自測", L"🧪 Mock Test"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             cur_x, sub_btn_y, w_mock, Scale(34, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnMockTest)), hinst_, nullptr);
@@ -2418,7 +2621,7 @@ private:
         cur_x += w_mock + gap;
 
         btn_repair_ = CreateWindowExW(
-            0, L"BUTTON", L"🔧 安裝／修復驅動",
+            0, L"BUTTON", T(L"🔧 安裝／修復驅動", L"🔧 Repair Driver"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             cur_x, sub_btn_y, w_rep, Scale(34, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnRepairDriver)), hinst_, nullptr);
@@ -2426,7 +2629,7 @@ private:
         cur_x += w_rep + gap;
 
         btn_diagnostics_ = CreateWindowExW(
-            0, L"BUTTON", L"🩺 診斷報錯",
+            0, L"BUTTON", T(L"🩺 診斷報錯", L"🩺 Diagnostics"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             cur_x, sub_btn_y, w_diag, Scale(34, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnDiagnostics)), hinst_, nullptr);
@@ -2434,7 +2637,7 @@ private:
         cur_x += w_diag + gap;
 
         btn_obs_guide_ = CreateWindowExW(
-            0, L"BUTTON", L"📋 OBS 教學",
+            0, L"BUTTON", T(L"📋 OBS 教學", L"📋 OBS Guide"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             cur_x, sub_btn_y, w_obs, Scale(34, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnCopyObsGuide)), hinst_, nullptr);
@@ -2442,7 +2645,7 @@ private:
         cur_x += w_obs + gap;
 
         btn_update_ = CreateWindowExW(
-            0, L"BUTTON", L"🔄 檢查更新",
+            0, L"BUTTON", T(L"🔄 檢查更新", L"🔄 Updates"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             cur_x, sub_btn_y, w_upd, Scale(34, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnCheckUpdate)), hinst_, nullptr);
@@ -2450,14 +2653,14 @@ private:
         cur_x += w_upd + gap;
 
         btn_uninstall_ = CreateWindowExW(
-            0, L"BUTTON", L"🗑 完整移除",
+            0, L"BUTTON", T(L"🗑 完整移除", L"🗑 Uninstall"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             cur_x, sub_btn_y, w_uninst, Scale(34, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnUninstall)), hinst_, nullptr);
         SendMessageW(btn_uninstall_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
 
         // Group 3: Live Stream Health Telemetry Dashboard (FPS / Bitrate Mbps / Decode Latency ms / Health Grade)
-        telemetry_rect_ = {margin, Scale(420, dpi), cw - margin, Scale(492, dpi)};
+        telemetry_rect_ = {margin, Scale(424, dpi), cw - margin, Scale(496, dpi)};
 
         // Group 4: Split Lower Section — Left: Live Diagnostics Log | Right: Low-Load Live Preview & 1:1 Lossless Screenshot
         int split_gap = Scale(14, dpi);
@@ -2465,13 +2668,14 @@ private:
         int right_x = margin + left_w + split_gap;
         int right_w = (cw - margin) - right_x;
 
-        int log_lbl_y = Scale(500, dpi);
-        HWND lbl_log = CreateWindowExW(
-            0, L"STATIC",
-            L"即時狀態、解析度比例與碼率監控日誌：",
+        int log_lbl_y = Scale(504, dpi);
+        lbl_log_ = CreateWindowExW(
+            0,
+            L"STATIC",
+            T(L"即時狀態、解析度比例與碼率監控日誌：", L"Live Status, Resolution & Bitrate Log:"),
             WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
             margin, log_lbl_y, left_w, Scale(22, dpi), hwnd_, nullptr, hinst_, nullptr);
-        SendMessageW(lbl_log, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+        SendMessageW(lbl_log_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
 
         int edit_y = log_lbl_y + Scale(24, dpi);
         int bottom_margin = Scale(12, dpi);
@@ -2485,7 +2689,10 @@ private:
         SendMessageW(edit_log_, EM_SETLIMITTEXT, 256 * 1024, 0);
 
         chk_inline_preview_ = CreateWindowExW(
-            0, L"BUTTON", L"👁 內建即時預覽（雙擊放大｜F12 原畫質截圖）",
+            0,
+            L"BUTTON",
+            T(L"👁 內建即時預覽（雙擊放大｜F12 原畫質截圖）",
+              L"👁 Built-in Preview (DblClick Popout | F12 Snapshot)"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
             right_x, log_lbl_y, right_w, Scale(22, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdChkInlinePreview)), hinst_, nullptr);
@@ -2510,7 +2717,7 @@ private:
         int px = right_x;
 
         btn_popout_monitor_ = CreateWindowExW(
-            0, L"BUTTON", L"🖥 獨立大視窗",
+            0, L"BUTTON", T(L"🖥 獨立大視窗", L"🖥 Popout View"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             px, preview_btn_y, w_pop, preview_btn_h,
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnPopoutMonitor)), hinst_, nullptr);
@@ -2518,7 +2725,7 @@ private:
         px += w_pop + p_gap;
 
         btn_screenshot_ = CreateWindowExW(
-            0, L"BUTTON", L"📸 原畫質截圖",
+            0, L"BUTTON", T(L"📸 原畫質截圖", L"📸 Screenshot"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             px, preview_btn_y, w_shot, preview_btn_h,
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnScreenshot)), hinst_, nullptr);
@@ -2526,7 +2733,7 @@ private:
         px += w_shot + p_gap;
 
         btn_open_shots_ = CreateWindowExW(
-            0, L"BUTTON", L"📂 圖庫",
+            0, L"BUTTON", T(L"📂 圖庫", L"📂 Folder"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             px, preview_btn_y, w_dir, preview_btn_h,
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnOpenScreenshots)), hinst_, nullptr);
@@ -2538,12 +2745,15 @@ private:
             icon_small_,
             font_bold_,
             font_normal_,
+            lang_,
             [this](HWND owner) { TakeFullResolutionScreenshot(owner); },
             [this]() { OpenScreenshotsFolder(); });
 
-        AppendLogLine(
+        AppendLogLine(T(
             L"[歡迎] 歡迎使用 JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR
-            L"！新增「🩺 智慧故障偵測與一鍵診斷報錯中心（含自動軟解自癒、隱私脫敏與 GitHub 回報）」！");
+            L"！支援「🌐 繁體中文 / English 介面語言即時切換」、智慧故障診斷與即時串流健康度儀表板！",
+            L"[Welcome] Welcome to JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR
+            L"! Features live Language switching (Traditional Chinese / English), Smart Diagnostics & Stream Health Telemetry!"));
         RefreshHealthAndUi(true);
         TickTelemetryDashboard(true);
         SetTimer(hwnd_, kTimerRefreshId, 2000, nullptr);
@@ -2552,7 +2762,74 @@ private:
         SetTimer(hwnd_, kTimerTelemetryId, 500, nullptr);
     }
 
-    void PopulateResolutionOptionsForSpeed(UsbLinkSpeed speed, bool is_initial) {
+    void ApplyLanguageToUi() {
+        if (!hwnd_) return;
+
+        SetWindowTextW(
+            hwnd_,
+            T(L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — 智慧擷取控制台 (故障偵測報錯 × 健康度儀表板 × 即時預覽)",
+              L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — Smart Capture Console (Diagnostics × Health Telemetry × Live Preview)"));
+
+        if (grp_pref_) {
+            SetWindowTextW(
+                grp_pref_,
+                T(L"擷取畫質上限（依 USB 速率自動開放選項）、音訊與語言設定",
+                  L"Capture Resolution Ceiling (Auto-Gated by USB Speed), Audio & Language"));
+        }
+        if (lbl_res_) SetWindowTextW(lbl_res_, T(L"最大解析度與比例選項：", L"Max Resolution & Aspect:"));
+        if (lbl_bar_) SetWindowTextW(lbl_bar_, T(L"手機頂部狀態列樣式：", L"iOS Status Bar Style:"));
+        if (lbl_aud_) SetWindowTextW(lbl_aud_, T(L"電腦端音訊監聽／轉發：", L"PC Audio Monitoring:"));
+        if (chk_hw_decode_) {
+            SetWindowTextW(
+                chk_hw_decode_,
+                T(L"啟用 GPU 硬體超低延遲解碼 (D3D11VA，建議開啟)",
+                  L"Enable GPU Hardware Decode (D3D11VA, recommended)"));
+        }
+        if (grp_act_) SetWindowTextW(grp_act_, T(L"一鍵自動化操作", L"One-Click Actions"));
+        if (btn_repair_) SetWindowTextW(btn_repair_, T(L"🔧 安裝／修復驅動", L"🔧 Repair Driver"));
+        if (btn_obs_guide_) SetWindowTextW(btn_obs_guide_, T(L"📋 OBS 教學", L"📋 OBS Guide"));
+        if (btn_uninstall_) SetWindowTextW(btn_uninstall_, T(L"🗑 完整移除", L"🗑 Uninstall"));
+        if (lbl_log_) {
+            SetWindowTextW(
+                lbl_log_,
+                T(L"即時狀態、解析度比例與碼率監控日誌：", L"Live Status, Resolution & Bitrate Log:"));
+        }
+        if (chk_inline_preview_) {
+            SetWindowTextW(
+                chk_inline_preview_,
+                T(L"👁 內建即時預覽（雙擊放大｜F12 原畫質截圖）",
+                  L"👁 Built-in Preview (DblClick Popout | F12 Snapshot)"));
+        }
+        if (btn_popout_monitor_) SetWindowTextW(btn_popout_monitor_, T(L"🖥 獨立大視窗", L"🖥 Popout View"));
+        if (btn_screenshot_) SetWindowTextW(btn_screenshot_, T(L"📸 原畫質截圖", L"📸 Screenshot"));
+        if (btn_open_shots_) SetWindowTextW(btn_open_shots_, T(L"📂 圖庫", L"📂 Folder"));
+
+        if (btn_update_) {
+            if (checking_update_.load(std::memory_order_acquire)) {
+                SetWindowTextW(btn_update_, T(L"⏳ 檢查中...", L"⏳ Checking..."));
+            } else if (cached_update_.update_available) {
+                std::wstring up_lbl =
+                    std::wstring(T(L"⬆️ 升級 ", L"⬆️ Update ")) + Utf8ToWide(cached_update_.latest.tag_name);
+                SetWindowTextW(btn_update_, up_lbl.c_str());
+            } else {
+                SetWindowTextW(btn_update_, T(L"🔄 檢查更新", L"🔄 Updates"));
+            }
+        }
+
+        PopulateLanguageCombo();
+        PopulateResolutionOptionsForSpeed(detected_usb_speed_, false, true);
+        PopulateStatusBarCombo(true);
+        PopulateAudioEndpoints(true);
+        UpdateDiagnosticsButtonBadge();
+        RefreshHealthAndUi(false);
+
+        if (live_monitor_) {
+            live_monitor_->SetLanguage(lang_);
+        }
+        InvalidateRect(hwnd_, nullptr, TRUE);
+    }
+
+    void PopulateResolutionOptionsForSpeed(UsbLinkSpeed speed, bool is_initial, bool preserve_current = false) {
         if (!combo_res_mode_) return;
 
         uint32_t prev_max_dim = 0;
@@ -2567,108 +2844,120 @@ private:
         std::vector<ResOptionSpec> next_opts;
 
         if (max_cap >= 3840U) {
-            // USB 3.x (5 / 10 / 20 Gbps): unlock full 3840p native tier + all lower tiers
             next_opts.push_back({
                 3840U,
                 L"native",
-                L"🌟 原生極限無上限（最高 3840p 自適應比例 — USB 3.x 高速接口已解鎖）",
+                T(L"🌟 原生極限無上限（最高 3840p 自適應比例 — USB 3.x 高速接口已解鎖）",
+                  L"🌟 Native Uncapped (Up to 3840p Adaptive Aspect — USB 3.x Unlocked)"),
                 L" --res native --max-dim 3840",
             });
             next_opts.push_back({
                 2560U,
                 L"native",
-                L"💎 2K 高畫質上限（最高 2560p 自適應比例）",
+                T(L"💎 2K 高畫質上限（最高 2560p 自適應比例）",
+                  L"💎 2K High Quality Cap (Up to 2560p Adaptive Aspect)"),
                 L" --res native --max-dim 2560",
             });
             next_opts.push_back({
                 1920U,
                 L"native",
-                L"✨ 1080p 標準上限（最高 1920p 自適應比例、低負載）",
+                T(L"✨ 1080p 標準上限（最高 1920p 自適應比例、低負載）",
+                  L"✨ 1080p Standard Cap (Up to 1920p Adaptive Aspect, Low Load)"),
                 L" --res native --max-dim 1920",
             });
             next_opts.push_back({
                 1280U,
                 L"native",
-                L"⚡ 720p 流暢上限（最高 1280p 自適應比例）",
+                T(L"⚡ 720p 流暢上限（最高 1280p 自適應比例）",
+                  L"⚡ 720p Smooth Cap (Up to 1280p Adaptive Aspect)"),
                 L" --res native --max-dim 1280",
             });
             next_opts.push_back({
                 2560U,
                 L"1440p",
-                L"🖥 固定 2K 16:9 畫布 (2560×1440，直橫屏旋轉自動補黑邊)",
+                T(L"🖥 固定 2K 16:9 畫布 (2560×1440，直橫屏旋轉自動補黑邊)",
+                  L"🖥 Fixed 2K 16:9 Canvas (2560×1440, Auto Letterbox on Rotation)"),
                 L" --res 1440p --max-dim 2560",
             });
             next_opts.push_back({
                 1920U,
                 L"1080p",
-                L"🖥 固定 1080p 16:9 畫布 (1920×1080，傳統直播相容模式)",
+                T(L"🖥 固定 1080p 16:9 畫布 (1920×1080，傳統直播相容模式)",
+                  L"🖥 Fixed 1080p 16:9 Canvas (1920×1080, Classic Stream Compatibility)"),
                 L" --res 1080p --max-dim 1920",
             });
         } else if (max_cap >= 2560U) {
-            // USB 2.0 (480 Mbps) or Unplugged: cap selectable max at 2K (2560p); 3840p option is gated out
             if (speed == UsbLinkSpeed::High_480Mbps) {
                 next_opts.push_back({
                     2560U,
                     L"native",
-                    L"💎 2K 高畫質上限（最高 2560p 自適應比例 — USB 2.0 接口最高上限）",
+                    T(L"💎 2K 高畫質上限（最高 2560p 自適應比例 — USB 2.0 接口最高上限）",
+                      L"💎 2K High Quality Cap (Up to 2560p Adaptive — USB 2.0 Max Tier)"),
                     L" --res native --max-dim 2560",
                 });
                 next_opts.push_back({
                     1920U,
                     L"native",
-                    L"✨ 1080p 標準上限（最高 1920p 自適應比例 — USB 2.0 穩定推薦）",
+                    T(L"✨ 1080p 標準上限（最高 1920p 自適應比例 — USB 2.0 穩定推薦）",
+                      L"✨ 1080p Standard Cap (Up to 1920p Adaptive — Recommended for USB 2.0)"),
                     L" --res native --max-dim 1920",
                 });
             } else {
                 next_opts.push_back({
                     2560U,
                     L"native",
-                    L"💎 2K 高畫質上限（最高 2560p 自適應 — 插入 USB 3.x 接口將解鎖 3840p）",
+                    T(L"💎 2K 高畫質上限（最高 2560p 自適應 — 插入 USB 3.x 接口將解鎖 3840p）",
+                      L"💎 2K High Quality Cap (Up to 2560p Adaptive — Plug USB 3.x to Unlock 3840p)"),
                     L" --res native --max-dim 2560",
                 });
                 next_opts.push_back({
                     1920U,
                     L"native",
-                    L"✨ 1080p 標準上限（最高 1920p 自適應比例、低負載）",
+                    T(L"✨ 1080p 標準上限（最高 1920p 自適應比例、低負載）",
+                      L"✨ 1080p Standard Cap (Up to 1920p Adaptive Aspect, Low Load)"),
                     L" --res native --max-dim 1920",
                 });
             }
             next_opts.push_back({
                 1280U,
                 L"native",
-                L"⚡ 720p 流暢上限（最高 1280p 自適應比例）",
+                T(L"⚡ 720p 流暢上限（最高 1280p 自適應比例）",
+                  L"⚡ 720p Smooth Cap (Up to 1280p Adaptive Aspect)"),
                 L" --res native --max-dim 1280",
             });
             next_opts.push_back({
                 2560U,
                 L"1440p",
-                L"🖥 固定 2K 16:9 畫布 (2560×1440，直橫屏旋轉自動補黑邊)",
+                T(L"🖥 固定 2K 16:9 畫布 (2560×1440，直橫屏旋轉自動補黑邊)",
+                  L"🖥 Fixed 2K 16:9 Canvas (2560×1440, Auto Letterbox on Rotation)"),
                 L" --res 1440p --max-dim 2560",
             });
             next_opts.push_back({
                 1920U,
                 L"1080p",
-                L"🖥 固定 1080p 16:9 畫布 (1920×1080，傳統直播相容模式)",
+                T(L"🖥 固定 1080p 16:9 畫布 (1920×1080，傳統直播相容模式)",
+                  L"🖥 Fixed 1080p 16:9 Canvas (1920×1080, Classic Stream Compatibility)"),
                 L" --res 1080p --max-dim 1920",
             });
         } else {
-            // USB 1.1 (1.5 / 12 Mbps): cap selectable max at 720p (1280p)
             next_opts.push_back({
                 1280U,
                 L"native",
-                L"⚡ 720p 流暢上限（最高 1280p 自適應比例 — USB 1.1 接口最高上限）",
+                T(L"⚡ 720p 流暢上限（最高 1280p 自適應比例 — USB 1.1 接口最高上限）",
+                  L"⚡ 720p Smooth Cap (Up to 1280p Adaptive — USB 1.1 Max Tier)"),
                 L" --res native --max-dim 1280",
             });
             next_opts.push_back({
                 960U,
                 L"native",
-                L"📱 540p 省頻寬上限（最高 960p 自適應比例）",
+                T(L"📱 540p 省頻寬上限（最高 960p 自適應比例）",
+                  L"📱 540p Low-Bandwidth Cap (Up to 960p Adaptive Aspect)"),
                 L" --res native --max-dim 960",
             });
             next_opts.push_back({
                 1280U,
                 L"720p",
-                L"🖥 固定 720p 16:9 畫布 (1280×720)",
+                T(L"🖥 固定 720p 16:9 畫布 (1280×720)", L"🖥 Fixed 720p 16:9 Canvas (1280×720)"),
                 L" --res 720p --max-dim 1280",
             });
         }
@@ -2680,7 +2969,7 @@ private:
         }
 
         int target_idx = 0;
-        if (!is_initial && user_manually_picked_res_ && prev_max_dim > 0) {
+        if (!is_initial && (user_manually_picked_res_ || preserve_current) && prev_max_dim > 0) {
             for (size_t i = 0; i < res_options_.size(); ++i) {
                 if (res_options_[i].max_dim == prev_max_dim && res_options_[i].mode_tag == prev_mode_tag) {
                     target_idx = static_cast<int>(i);
@@ -2691,26 +2980,54 @@ private:
         SendMessageW(combo_res_mode_, CB_SETCURSEL, target_idx, 0);
     }
 
-    void PopulateAudioEndpoints() {
+    void PopulateAudioEndpoints(bool preserve_selection = false) {
+        std::wstring prev_choice;
+        if (preserve_selection && combo_audio_) {
+            LRESULT cur = SendMessageW(combo_audio_, CB_GETCURSEL, 0, 0);
+            if (cur >= 0 && static_cast<size_t>(cur) < audio_endpoint_matches_.size()) {
+                prev_choice = audio_endpoint_matches_[static_cast<size_t>(cur)];
+            }
+        }
+
         SendMessageW(combo_audio_, CB_RESETCONTENT, 0, 0);
         audio_endpoint_matches_.clear();
 
-        SendMessageW(combo_audio_, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"自動偵測 VB-Audio Virtual Cable（預設，供 Discord/Zoom 收音）"));
+        SendMessageW(
+            combo_audio_,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(T(
+                L"自動偵測 VB-Audio Virtual Cable（預設，供 Discord/Zoom 收音）",
+                L"Auto-Detect VB-Audio Virtual Cable (Default for Discord / Zoom)")));
         audio_endpoint_matches_.push_back(L"__AUTO__");
 
-        SendMessageW(combo_audio_, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"僅輸出至 OBS「JCast for iOS (Audio)」（不在電腦喇叭播放）"));
+        SendMessageW(
+            combo_audio_,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(T(
+                L"僅輸出至 OBS「JCast for iOS (Audio)」（不在電腦喇叭播放）",
+                L"OBS 'JCast for iOS (Audio)' Only (Mute PC Speakers)")));
         audio_endpoint_matches_.push_back(L"__NONE__");
 
         auto eps = WasapiAudioRouter::EnumerateRenderEndpoints();
         for (const auto& ep : eps) {
             std::wstring wname = Utf8ToWide(ep.friendly_name_utf8);
-            std::wstring label = L"🎧 同步播放／轉發至：" + wname;
+            std::wstring label = std::wstring(T(L"🎧 同步播放／轉發至：", L"🎧 Monitor / Route to: ")) + wname;
             SendMessageW(combo_audio_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
             audio_endpoint_matches_.push_back(wname);
         }
-        SendMessageW(combo_audio_, CB_SETCURSEL, 0, 0);
+
+        int sel_idx = 0;
+        if (!prev_choice.empty()) {
+            for (size_t i = 0; i < audio_endpoint_matches_.size(); ++i) {
+                if (audio_endpoint_matches_[i] == prev_choice) {
+                    sel_idx = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
+        SendMessageW(combo_audio_, CB_SETCURSEL, sel_idx, 0);
     }
 
     void AppendLogLine(const std::wstring& line) {
@@ -2760,10 +3077,11 @@ private:
                     PopulateResolutionOptionsForSpeed(new_spd, false);
                     uint32_t cap = MaxSelectableDimForUsbSpeed(new_spd);
                     AppendLogLine(
-                        L"[USB 速率辨識] 已偵測到連接埠速率：" +
+                        std::wstring(T(L"[USB 速率辨識] 已偵測到連接埠速率：", L"[USB Speed] Detected link speed: ")) +
                         Utf8ToWide(UsbLinkSpeedName(new_spd)) +
-                        L" ➔ 已開放最高 " + std::to_wstring(cap) +
-                        L"p 解析度選項（開始傳輸後將全程鎖定所選解析度，不會中途自動變動）。");
+                        T(L" ➔ 已開放最高 ", L" -> Unlocked up to ") + std::to_wstring(cap) +
+                        T(L"p 解析度選項（開始傳輸後將全程鎖定所選解析度，不會中途自動變動）。",
+                          L"p options (locked during streaming; never auto-changes mid-stream)."));
                 }
             }
         }
@@ -2771,11 +3089,14 @@ private:
 
         if (running) {
             if (running_mock_) {
-                SetWindowTextW(btn_smart_start_, L"■ 停止自測訊號");
-                SetWindowTextW(btn_mock_, L"■ 停止自測");
+                SetWindowTextW(btn_smart_start_, T(L"■ 停止自測訊號", L"■ Stop Mock Test Signal"));
+                SetWindowTextW(btn_mock_, T(L"■ 停止自測", L"■ Stop Mock"));
             } else {
-                SetWindowTextW(btn_smart_start_, L"■ 停止 iPhone 投影擷取（安全切回一般充電/傳輸模式）");
-                SetWindowTextW(btn_mock_, L"🧪 免手機自測");
+                SetWindowTextW(
+                    btn_smart_start_,
+                    T(L"■ 停止 iPhone 投影擷取（安全切回一般充電/傳輸模式）",
+                      L"■ Stop iPhone Capture (Safely Restore Normal USB Mode)"));
+                SetWindowTextW(btn_mock_, T(L"🧪 免手機自測", L"🧪 Mock Test"));
                 EnableWindow(btn_mock_, FALSE);
             }
             EnableWindow(combo_res_mode_, FALSE);
@@ -2789,12 +3110,17 @@ private:
                                !health_.libusb_service_ok ||
                                (health_.ios_usb == IosUsbState::PluggedNeedFilter);
             if (needs_setup) {
-                SetWindowTextW(btn_smart_start_,
-                               L"🚀 智慧一鍵啟動（自動安裝驅動與 JCast 虛擬擷取卡 ➔ 開始投影）");
+                SetWindowTextW(
+                    btn_smart_start_,
+                    T(L"🚀 智慧一鍵啟動（自動安裝驅動與 JCast 虛擬擷取卡 ➔ 開始投影）",
+                      L"🚀 Smart Start (Auto-Install Driver & Virtual Capture Card -> Begin Capture)"));
             } else {
-                SetWindowTextW(btn_smart_start_, L"▶ 開始 iPhone / iPad 有線投影擷取（鎖定所選解析度 @ 60fps）");
+                SetWindowTextW(
+                    btn_smart_start_,
+                    T(L"▶ 開始 iPhone / iPad 有線投影擷取（鎖定所選解析度 @ 60fps）",
+                      L"▶ Start Wired iPhone / iPad Capture (Locked Resolution @ 60fps)"));
             }
-            SetWindowTextW(btn_mock_, L"🧪 免手機自測");
+            SetWindowTextW(btn_mock_, T(L"🧪 免手機自測", L"🧪 Mock Test"));
             EnableWindow(btn_mock_, TRUE);
             EnableWindow(combo_res_mode_, TRUE);
             EnableWindow(combo_status_bar_, TRUE);
@@ -2825,25 +3151,31 @@ private:
             bg_color = RGB(232, 248, 238);
             accent_color = RGB(22, 136, 72);
             headline = running_mock_
-                           ? L"🟢 JCast 正在輸出自測動態彩條與 48kHz 測試音（請開啟 OBS 預覽）"
-                           : L"🟢 JCast 有線投影執行中（已鎖定所選解析度 @ 60fps + 48kHz 音訊）";
+                           ? T(L"🟢 JCast 正在輸出自測動態彩條與 48kHz 測試音（請開啟 OBS 預覽）",
+                               L"🟢 JCast Mock Test Active — Animated Color Bars + 48kHz Tone")
+                           : T(L"🟢 JCast 有線投影執行中（已鎖定所選解析度 @ 60fps + 48kHz 音訊）",
+                               L"🟢 JCast Wired Capture Active (Locked Resolution @ 60fps + 48kHz Audio)");
         } else if (health_.ios_usb == IosUsbState::PluggedZadigConflict) {
             bg_color = RGB(255, 240, 240);
             accent_color = RGB(196, 43, 28);
-            headline = L"⚠️ 偵測到父裝置驅動遭 Zadig 覆蓋（請於裝置管理員還原 Apple 複合裝置驅動）";
+            headline = T(L"⚠️ 偵測到父裝置驅動遭 Zadig 覆蓋（請於裝置管理員還原 Apple 複合裝置驅動）",
+                         L"⚠️ Apple USB Composite Driver Overwritten by Zadig (Restore in Device Manager)");
         } else if (health_.dshow != DshowRegState::Ready || !health_.libusb_service_ok ||
                    health_.ios_usb == IosUsbState::PluggedNeedFilter) {
             bg_color = RGB(255, 248, 232);
             accent_color = RGB(180, 105, 14);
-            headline = L"⚡ 準備開始：請點擊下方「智慧一鍵啟動」自動完成驅動掛載與高畫質投影";
+            headline = T(L"⚡ 準備開始：請點擊下方「智慧一鍵啟動」自動完成驅動掛載與高畫質投影",
+                         L"⚡ Ready to Setup: Click 'Smart Start' below to attach driver & start capture");
         } else if (health_.ios_usb == IosUsbState::PluggedReady) {
             bg_color = RGB(234, 247, 240);
             accent_color = RGB(20, 130, 75);
-            headline = L"✅ iPhone 與驅動皆已就緒！請確認解析度選項後點擊「開始有線投影擷取」";
+            headline = T(L"✅ iPhone 與驅動皆已就緒！請確認解析度選項後點擊「開始有線投影擷取」",
+                         L"✅ iOS Device & Drivers Ready! Pick your resolution and click Start Capture");
         } else {
             bg_color = RGB(242, 245, 250);
             accent_color = RGB(45, 95, 185);
-            headline = L"🔌 JCast for iOS 已就緒 — 請插上已點「信任」的 iPhone/iPad 自動辨識 USB 速率";
+            headline = T(L"🔌 JCast for iOS 已就緒 — 請插上已點「信任」的 iPhone/iPad 自動辨識 USB 速率",
+                         L"🔌 JCast for iOS Ready — Plug in a Trusted iPhone/iPad to Auto-Detect USB Speed");
         }
 
         RECT local_rc{0, 0, w, h};
@@ -2884,39 +3216,51 @@ private:
 
         std::wstring dshow_txt;
         if (health_.dshow == DshowRegState::Ready) {
-            dshow_txt = L"• DirectShow 虛擬擷取卡 (JCast for iOS)：✅ 已安裝";
+            dshow_txt = T(L"• DirectShow 虛擬擷取卡 (JCast for iOS)：✅ 已安裝",
+                          L"• DirectShow Virtual Capture Card (JCast for iOS): ✅ Installed");
         } else if (health_.dshow == DshowRegState::PathMismatch) {
-            dshow_txt = L"• DirectShow 虛擬擷取卡 (JCast for iOS)：⚠️ 資料夾已移動（點一鍵啟動自動更新）";
+            dshow_txt = T(L"• DirectShow 虛擬擷取卡 (JCast for iOS)：⚠️ 資料夾已移動（點一鍵啟動自動更新）",
+                          L"• DirectShow Virtual Capture Card (JCast for iOS): ⚠️ Folder Moved (Auto-fixes on Start)");
         } else {
-            dshow_txt = L"• DirectShow 虛擬擷取卡 (JCast for iOS)：⏳ 尚未註冊（點一鍵啟動自動完成）";
+            dshow_txt = T(L"• DirectShow 虛擬擷取卡 (JCast for iOS)：⏳ 尚未註冊（點一鍵啟動自動完成）",
+                          L"• DirectShow Virtual Capture Card (JCast for iOS): ⏳ Not Registered (Auto-fixes on Start)");
         }
 
         std::wstring usb_drv_txt = health_.libusb_service_ok
-                                       ? L"• WHQL 簽章過濾驅動 (libusb0)：✅ 已就緒"
-                                       : L"• WHQL 簽章過濾驅動 (libusb0)：⏳ 待安裝";
+                                       ? T(L"• WHQL 簽章過濾驅動 (libusb0)：✅ 已就緒",
+                                           L"• WHQL Filter Driver (libusb0): ✅ Ready")
+                                       : T(L"• WHQL 簽章過濾驅動 (libusb0)：⏳ 待安裝",
+                                           L"• WHQL Filter Driver (libusb0): ⏳ Pending Setup");
         if (cached_update_.update_available) {
-            usb_drv_txt += L"   ｜   🎉 發現新版 " + Utf8ToWide(cached_update_.latest.tag_name) + L" 可一鍵升級！";
+            usb_drv_txt += std::wstring(T(L"   ｜   🎉 發現新版 ", L"   |   🎉 Update ")) +
+                           Utf8ToWide(cached_update_.latest.tag_name) +
+                           T(L" 可一鍵升級！", L" Available!");
         } else {
-            usb_drv_txt += L"   ｜   目前版本：v" IOS_VCAM_VER_DISPLAY_WSTR;
+            usb_drv_txt += std::wstring(T(L"   ｜   目前版本：v", L"   |   Version: v")) + IOS_VCAM_VER_DISPLAY_WSTR;
         }
 
-        std::wstring speed_badge = FormatUsbSpeedBadgeWide(detected_usb_speed_);
+        std::wstring speed_badge = FormatUsbSpeedBadgeWide(detected_usb_speed_, lang_);
         std::wstring speed_suffix = speed_badge.empty() ? L"" : (L" [" + speed_badge + L"]");
 
         std::wstring phone_txt;
         switch (health_.ios_usb) {
             case IosUsbState::PluggedReady:
-                phone_txt = L"• iPhone / iPad USB：✅ 已連線" + speed_suffix;
+                phone_txt = std::wstring(T(L"• iPhone / iPad USB：✅ 已連線", L"• iPhone / iPad USB: ✅ Connected")) +
+                            speed_suffix;
                 break;
             case IosUsbState::PluggedNeedFilter:
-                phone_txt = L"• iPhone / iPad USB：📱 已偵測（點啟動掛載過濾層）" + speed_suffix;
+                phone_txt = std::wstring(T(L"• iPhone / iPad USB：📱 已偵測（點啟動掛載過濾層）",
+                                           L"• iPhone / iPad USB: 📱 Detected (Click Start to attach filter)")) +
+                            speed_suffix;
                 break;
             case IosUsbState::PluggedZadigConflict:
-                phone_txt = L"• iPhone / iPad USB：❌ 偵測到 " + health_.ios_service_name +
-                            L" 覆蓋原廠驅動";
+                phone_txt = std::wstring(T(L"• iPhone / iPad USB：❌ 偵測到 ", L"• iPhone / iPad USB: ❌ Conflict with ")) +
+                            health_.ios_service_name +
+                            T(L" 覆蓋原廠驅動", L" driver");
                 break;
             case IosUsbState::Unplugged:
-                phone_txt = L"• iPhone / iPad USB：🔌 尚未插入 USB（插入後自動辨識 USB 3.x / 2.0 速率並更新可選上限）";
+                phone_txt = T(L"• iPhone / iPad USB：🔌 尚未插入 USB（插入後自動辨識 USB 3.x / 2.0 速率並更新可選上限）",
+                              L"• iPhone / iPad USB: 🔌 Not Connected (Auto-detects USB 3.x / 2.0 speed on plug-in)");
                 break;
         }
 
@@ -2937,13 +3281,21 @@ private:
     bool RunDriverSetupElevated(const wchar_t* arg_flag) {
         std::filesystem::path exe = base_dir_ / L"ios_vcam_driver_setup.exe";
         if (!std::filesystem::exists(exe)) {
-            AppendLogLine(L"[錯誤] 找不到 ios_vcam_driver_setup.exe，請確認程式資料夾檔案完整！");
-            MessageBoxW(hwnd_, L"找不到 ios_vcam_driver_setup.exe，請確認完整安裝或解壓縮 JCast for iOS 資料夾！",
-                        L"缺少檔案", MB_ICONERROR | MB_OK);
+            AppendLogLine(T(L"[錯誤] 找不到 ios_vcam_driver_setup.exe，請確認程式資料夾檔案完整！",
+                            L"[Error] Missing ios_vcam_driver_setup.exe. Please verify all app files are extracted!"));
+            MessageBoxW(
+                hwnd_,
+                T(L"找不到 ios_vcam_driver_setup.exe，請確認完整安裝或解壓縮 JCast for iOS 資料夾！",
+                  L"ios_vcam_driver_setup.exe was not found. Please reinstall or extract the full JCast for iOS folder!"),
+                T(L"缺少檔案", L"Missing File"),
+                MB_ICONERROR | MB_OK);
             return false;
         }
 
-        AppendLogLine(std::wstring(L"[系統] 正在請求系統管理員權限執行 ios_vcam_driver_setup.exe ") + arg_flag + L" ...");
+        AppendLogLine(
+            std::wstring(T(L"[系統] 正在請求系統管理員權限執行 ios_vcam_driver_setup.exe ",
+                           L"[System] Requesting administrator elevation for ios_vcam_driver_setup.exe ")) +
+            arg_flag + L" ...");
 
         SHELLEXECUTEINFOW sei{};
         sei.cbSize = sizeof(sei);
@@ -2958,9 +3310,13 @@ private:
         if (!ShellExecuteExW(&sei)) {
             DWORD err = GetLastError();
             if (err == ERROR_CANCELLED) {
-                AppendLogLine(L"[取消] 使用者取消了管理員權限授權 (UAC)。");
+                AppendLogLine(T(L"[取消] 使用者取消了管理員權限授權 (UAC)。",
+                                L"[Cancelled] Administrator elevation (UAC) was cancelled by user."));
             } else {
-                AppendLogLine(L"[錯誤] 無法啟動安裝輔助程式 (錯誤碼 " + std::to_wstring(err) + L")。");
+                AppendLogLine(
+                    std::wstring(T(L"[錯誤] 無法啟動安裝輔助程式 (錯誤碼 ",
+                                   L"[Error] Failed to launch driver setup helper (error ")) +
+                    std::to_wstring(err) + L").");
             }
             return false;
         }
@@ -2978,10 +3334,14 @@ private:
             CloseHandle(sei.hProcess);
             RefreshHealthAndUi(true);
             if (exit_code == 0) {
-                AppendLogLine(L"[成功] 驅動過濾層與 JCast for iOS 虛擬擷取卡設定完成！");
+                AppendLogLine(T(L"[成功] 驅動過濾層與 JCast for iOS 虛擬擷取卡設定完成！",
+                                L"[Success] Driver filter and JCast for iOS virtual capture card configured!"));
                 return true;
             }
-            AppendLogLine(L"[提醒] 設定程式回傳代碼 " + std::to_wstring(exit_code) + L"，請確認檔案完整或重試。");
+            AppendLogLine(
+                std::wstring(T(L"[提醒] 設定程式回傳代碼 ", L"[Notice] Driver setup returned exit code ")) +
+                std::to_wstring(exit_code) +
+                T(L"，請確認檔案完整或重試。", L". Please verify files and retry."));
             return false;
         }
         RefreshHealthAndUi(true);
@@ -3002,9 +3362,10 @@ private:
     void UpdateDiagnosticsButtonBadge() {
         if (btn_diagnostics_) {
             if (recent_faults_.empty()) {
-                SetWindowTextW(btn_diagnostics_, L"🩺 診斷報錯");
+                SetWindowTextW(btn_diagnostics_, T(L"🩺 診斷報錯", L"🩺 Diagnostics"));
             } else {
-                std::wstring lbl = L"⚠️ 診斷報錯 (" + std::to_wstring(recent_faults_.size()) + L")";
+                std::wstring lbl = std::wstring(T(L"⚠️ 診斷報錯 (", L"⚠️ Issues (")) +
+                                   std::to_wstring(recent_faults_.size()) + L")";
                 SetWindowTextW(btn_diagnostics_, lbl.c_str());
             }
         }
@@ -3022,6 +3383,7 @@ private:
             hwnd_,
             base_dir_,
             dpi,
+            lang_,
             font_normal_,
             font_bold_,
             font_title_,
@@ -3073,11 +3435,12 @@ private:
                 detail,
             });
 
-            const auto& spec = LookupDiagSpec(code);
+            const auto& spec = LookupDiagSpec(code, lang_);
             AppendLogLine(
-                L"[異常偵測 " + Utf8ToWide(spec.code_str) + L"] " +
+                std::wstring(T(L"[異常偵測 ", L"[Fault Detected ")) + Utf8ToWide(spec.code_str) + L"] " +
                 Utf8ToWide(spec.title_utf8) + L" — " + detail +
-                L"（點「🩺 診斷報錯」檢視排除步驟或一鍵回報）");
+                T(L"（點「🩺 診斷報錯」檢視排除步驟或一鍵回報）",
+                  L" (Click 'Diagnostics' for fix steps & bug reporting)"));
         }
 
         UpdateDiagnosticsButtonBadge();
@@ -3095,13 +3458,14 @@ private:
         if (!health_.missing_core_files.empty()) {
             std::wstring missing_list;
             for (size_t i = 0; i < health_.missing_core_files.size(); ++i) {
-                if (i > 0) missing_list += L"、";
+                if (i > 0) missing_list += L", ";
                 missing_list += health_.missing_core_files[i];
             }
             RecordDiagnosticFault(
                 DiagCode::E101_MissingCoreFiles,
                 DiagSeverity::Critical,
-                L"程式目錄缺少必要元件：" + missing_list + L"，請重新完整解壓縮或執行安裝程式。",
+                std::wstring(T(L"程式目錄缺少必要元件：", L"Missing required app files: ")) + missing_list +
+                    T(L"，請重新完整解壓縮或執行安裝程式。", L". Please extract the full archive or reinstall."),
                 true);
             return;
         }
@@ -3110,7 +3474,8 @@ private:
             RecordDiagnosticFault(
                 DiagCode::E103_MissingMediaFoundation,
                 DiagSeverity::Critical,
-                L"系統缺少 mfplat.dll 或 msmpeg2vdec.dll（Windows N / KN 版本請先安裝媒體功能套件）。",
+                T(L"系統缺少 mfplat.dll 或 msmpeg2vdec.dll（Windows N / KN 版本請先安裝媒體功能套件）。",
+                  L"Missing mfplat.dll or msmpeg2vdec.dll (Windows N/KN editions require Media Feature Pack)."),
                 true);
             return;
         }
@@ -3119,7 +3484,9 @@ private:
             RecordDiagnosticFault(
                 DiagCode::E201_ZadigDriverConflict,
                 DiagSeverity::Critical,
-                L"偵測到父複合裝置遭 " + health_.ios_service_name + L" 覆蓋原廠驅動，無法啟用 Apple 影音通道。",
+                std::wstring(T(L"偵測到父複合裝置遭 ", L"Composite USB parent overwritten by ")) +
+                    health_.ios_service_name +
+                    T(L" 覆蓋原廠驅動，無法啟用 Apple 影音通道。", L"; Apple media channel cannot activate."),
                 true);
             return;
         }
@@ -3128,7 +3495,8 @@ private:
             RecordDiagnosticFault(
                 DiagCode::E102_MissingAppleService,
                 DiagSeverity::Warning,
-                L"尚未偵測到 Apple 裝置 / iTunes 配對服務；若手機未跳出「信任這部電腦」請先安裝 Apple 裝置。",
+                T(L"尚未偵測到 Apple 裝置 / iTunes 配對服務；若手機未跳出「信任這部電腦」請先安裝 Apple 裝置。",
+                  L"Apple Devices / iTunes pairing service not detected; install Apple Devices if Trust prompt does not appear."),
                 false);
         }
 
@@ -3145,7 +3513,9 @@ private:
                 if (!RunDriverSetupElevated(L"--install")) return;
             }
             if (health_.ios_usb == IosUsbState::Unplugged) {
-                AppendLogLine(L"[提示] 目前尚未插入 iPhone，已進入等待連線模式；插上手機並點「信任」後若為首次插入，再點一次「安裝／修復驅動」即可掛載過濾層。");
+                AppendLogLine(T(
+                    L"[提示] 目前尚未插入 iPhone，已進入等待連線模式；插上手機並點「信任」後若為首次插入，再點一次「安裝／修復驅動」即可掛載過濾層。",
+                    L"[Tip] No iPhone detected yet — waiting for USB connection. After plugging in and tapping 'Trust', click 'Repair Driver' once if first time."));
             } else {
                 RefreshHealthAndUi(true);
             }
@@ -3155,7 +3525,7 @@ private:
                                   L"_" + std::to_wstring(GetTickCount64());
         HANDLE hStopEvt = CreateEventW(nullptr, TRUE, FALSE, event_name.c_str());
         if (!hStopEvt) {
-            AppendLogLine(L"[錯誤] 無法建立跨行程控制事件。");
+            AppendLogLine(T(L"[錯誤] 無法建立跨行程控制事件。", L"[Error] Failed to create IPC stop event."));
             return;
         }
 
@@ -3172,7 +3542,7 @@ private:
         std::wstring cmd = L"\"" + host_exe.wstring() + L"\" --stop-event " + event_name;
 
         LRESULT res_idx = SendMessageW(combo_res_mode_, CB_GETCURSEL, 0, 0);
-        std::wstring chosen_res_label = L"預設自適應上限";
+        std::wstring chosen_res_label = T(L"預設自適應上限", L"Default Adaptive Cap");
         if (res_idx >= 0 && static_cast<size_t>(res_idx) < res_options_.size()) {
             cmd += res_options_[static_cast<size_t>(res_idx)].cli_args;
             chosen_res_label = res_options_[static_cast<size_t>(res_idx)].label;
@@ -3236,7 +3606,9 @@ private:
             RecordDiagnosticFault(
                 DiagCode::E503_HostUnexpectedExit,
                 DiagSeverity::Critical,
-                L"無法啟動背景擷取引擎 ios_vcam_host.exe（Windows 錯誤碼 " + std::to_wstring(err) + L"）。",
+                std::wstring(T(L"無法啟動背景擷取引擎 ios_vcam_host.exe（Windows 錯誤碼 ",
+                               L"Failed to launch capture engine ios_vcam_host.exe (Win32 error ")) +
+                    std::to_wstring(err) + L").",
                 true);
             return;
         }
@@ -3254,8 +3626,13 @@ private:
         RefreshHealthAndUi(false);
         TickTelemetryDashboard(true);
 
-        AppendLogLine(mock_mode ? L"=== 已啟動 JCast 免手機自測模式（彩條 + 48kHz 測試音） ==="
-                                : (L"=== 已啟動 JCast 有線投影｜本次鎖定選項：" + chosen_res_label + L" ==="));
+        AppendLogLine(
+            mock_mode
+                ? T(L"=== 已啟動 JCast 免手機自測模式（彩條 + 48kHz 測試音） ===",
+                    L"=== Started JCast Mock Test Mode (Color Bars + 48kHz Tone) ===")
+                : (std::wstring(T(L"=== 已啟動 JCast 有線投影｜本次鎖定選項：",
+                                  L"=== Started JCast Wired Capture | Locked Option: ")) +
+                   chosen_res_label + L" ==="));
 
         if (log_reader_thread_.joinable()) {
             log_reader_thread_.join();
@@ -3342,7 +3719,7 @@ private:
     }
 
     void ShowAndCopyObsGuide() {
-        const wchar_t* guide =
+        const wchar_t* guide = T(
             L"【JCast for iOS — OBS Studio 滿版自適應比例設定步驟】\r\n\r\n"
             L"1. 先在本控制台插上手機（自動辨識 USB 速率並開放最大解析度選項），選好解析度後點擊「智慧一鍵啟動」。\r\n"
             L"   💡 若只想把電腦當 iPhone/iPad 外接大螢幕，直接點右下角「🖥 獨立大視窗」（按 F11 全螢幕、F12 原畫質截圖），完全不必開 OBS！\r\n"
@@ -3350,24 +3727,22 @@ private:
             L"3.「解析度/FPS 類型」保持「裝置預設值」：OBS 會自動抓到您鎖定的 iPhone/iPad 原生比例（滿版零黑邊）！\r\n"
             L"   （若您先開了 OBS 才連手機，只要在 OBS 來源點一下「停用 ➔ 啟用」就會自動刷新成原生比例）\r\n"
             L"4. 往下捲動到底部勾選「使用自訂音訊裝置」➔ 選擇：JCast for iOS (Audio)\r\n\r\n"
-            L"（裝置名稱已複製到剪貼簿：JCast for iOS (Video)）";
+            L"（裝置名稱已複製到剪貼簿：JCast for iOS (Video)）",
+            L"[JCast for iOS — OBS Studio Native Aspect Ratio Setup Guide]\r\n\r\n"
+            L"1. Plug in your iPhone/iPad here (USB speed & resolution tiers auto-detect), pick a max resolution, and click 'Smart Start'.\r\n"
+            L"   💡 Tip: To use your PC purely as a low-latency external monitor, click '🖥 Popout View' (F11 Fullscreen, F12 Screenshot) — no OBS needed!\r\n"
+            L"2. In OBS Studio, add a 'Video Capture Device' -> select: JCast for iOS (Video)\r\n"
+            L"3. Leave 'Resolution/FPS Type' on 'Device Default' so OBS automatically adapts to your device's exact native aspect ratio (zero black bars).\r\n"
+            L"   (If OBS was opened before plugging in, click Deactivate -> Activate once to refresh.)\r\n"
+            L"4. Scroll down and check 'Use custom audio device' -> select: JCast for iOS (Audio)\r\n\r\n"
+            L"(Device name copied to clipboard: JCast for iOS (Video))");
 
-        if (OpenClipboard(hwnd_)) {
-            EmptyClipboard();
-            const wchar_t* clip_txt = L"JCast for iOS (Video)";
-            size_t cb = (wcslen(clip_txt) + 1) * sizeof(wchar_t);
-            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, cb);
-            if (hMem) {
-                void* ptr = GlobalLock(hMem);
-                if (ptr) {
-                    std::memcpy(ptr, clip_txt, cb);
-                    GlobalUnlock(hMem);
-                    SetClipboardData(CF_UNICODETEXT, hMem);
-                }
-            }
-            CloseClipboard();
-        }
-        MessageBoxW(hwnd_, guide, L"JCast for iOS — OBS 設定教學", MB_ICONINFORMATION | MB_OK);
+        CopyWideTextToClipboard(hwnd_, L"JCast for iOS (Video)");
+        MessageBoxW(
+            hwnd_,
+            guide,
+            T(L"JCast for iOS — OBS 設定教學", L"JCast for iOS — OBS Setup Guide"),
+            MB_ICONINFORMATION | MB_OK);
     }
 
     void OpenUpdateDialog(const UpdateCheckResult& info) {
@@ -3378,6 +3753,7 @@ private:
             base_dir_,
             info,
             dpi,
+            lang_,
             font_normal_,
             font_bold_,
             font_title_,
@@ -3389,7 +3765,8 @@ private:
                 }
             });
         if (dlg.RunModal()) {
-            AppendLogLine(L"[軟體更新] 已啟動自動更新程序，正在關閉目前視窗以完成替換...");
+            AppendLogLine(T(L"[軟體更新] 已啟動自動更新程序，正在關閉目前視窗以完成替換...",
+                            L"[Updater] Update launcher started — closing window to apply update..."));
             PostMessageW(hwnd_, WM_CLOSE, 0, 0);
         }
     }
@@ -3399,9 +3776,10 @@ private:
             return;
         }
         if (manual_trigger) {
-            SetWindowTextW(btn_update_, L"⏳ 檢查中...");
+            SetWindowTextW(btn_update_, T(L"⏳ 檢查中...", L"⏳ Checking..."));
             EnableWindow(btn_update_, FALSE);
-            AppendLogLine(L"[更新檢查] 正在連線至 GitHub Releases API 檢查最新版本...");
+            AppendLogLine(T(L"[更新檢查] 正在連線至 GitHub Releases API 檢查最新版本...",
+                            L"[Updater] Checking GitHub Releases API for latest version..."));
         }
 
         if (update_check_thread_.joinable()) {
@@ -3436,17 +3814,25 @@ private:
 
         if (!res.ok) {
             std::wstring restore_lbl = cached_update_.update_available
-                                           ? (L"⬆️ 升級 " + Utf8ToWide(cached_update_.latest.tag_name))
-                                           : L"🔄 檢查更新";
+                                           ? (std::wstring(T(L"⬆️ 升級 ", L"⬆️ Update ")) +
+                                              Utf8ToWide(cached_update_.latest.tag_name))
+                                           : std::wstring(T(L"🔄 檢查更新", L"🔄 Updates"));
             SetWindowTextW(btn_update_, restore_lbl.c_str());
 
             if (manual_trigger) {
                 std::wstring werr = Utf8ToWide(res.error_message);
-                AppendLogLine(L"[更新檢查失敗] " + werr);
+                AppendLogLine(std::wstring(T(L"[更新檢查失敗] ", L"[Update Check Failed] ")) + werr);
                 std::wstring prompt =
-                    L"無法從 GitHub Releases API 取得版本資訊：\r\n" + werr +
-                    L"\r\n\r\n是否直接以瀏覽器開啟 GitHub Releases 發布頁面查看？";
-                if (MessageBoxW(hwnd_, prompt.c_str(), L"檢查更新失敗", MB_ICONWARNING | MB_YESNO) == IDYES) {
+                    std::wstring(T(L"無法從 GitHub Releases API 取得版本資訊：\r\n",
+                                   L"Failed to query GitHub Releases API:\r\n")) +
+                    werr +
+                    T(L"\r\n\r\n是否直接以瀏覽器開啟 GitHub Releases 發布頁面查看？",
+                      L"\r\n\r\nOpen the GitHub Releases page in your browser instead?");
+                if (MessageBoxW(
+                        hwnd_,
+                        prompt.c_str(),
+                        T(L"檢查更新失敗", L"Update Check Failed"),
+                        MB_ICONWARNING | MB_YESNO) == IDYES) {
                     ShellExecuteW(
                         hwnd_,
                         L"open",
@@ -3461,33 +3847,46 @@ private:
 
         cached_update_ = res;
         if (!res.update_available) {
-            SetWindowTextW(btn_update_, L"🔄 檢查更新");
+            SetWindowTextW(btn_update_, T(L"🔄 檢查更新", L"🔄 Updates"));
             InvalidateRect(hwnd_, &banner_rect_, FALSE);
             AppendLogLine(
-                L"[更新檢查] 目前已是最新版本 (v" IOS_VCAM_VER_DISPLAY_WSTR L"，GitHub 最新發布：" +
-                Utf8ToWide(res.latest.tag_name) + L")。");
+                std::wstring(T(L"[更新檢查] 目前已是最新版本 (v", L"[Updater] You are up to date (v")) +
+                IOS_VCAM_VER_DISPLAY_WSTR +
+                T(L"，GitHub 最新發布：", L", GitHub latest: ") +
+                Utf8ToWide(res.latest.tag_name) + L").");
 
             if (manual_trigger) {
                 std::wstring msg =
-                    L"您目前使用的 JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" 已是最新版本！\r\n\r\n"
-                    L"• GitHub 最新版本：" + Utf8ToWide(res.latest.tag_name) + L"\r\n" +
+                    std::wstring(T(L"您目前使用的 JCast for iOS v", L"JCast for iOS v")) +
+                    IOS_VCAM_VER_DISPLAY_WSTR +
+                    T(L" 已是最新版本！\r\n\r\n• GitHub 最新版本：", L" is already the latest version!\r\n\r\n• Latest on GitHub: ") +
+                    Utf8ToWide(res.latest.tag_name) + L"\r\n" +
                     (res.latest.published_at.empty()
                          ? L""
-                         : (L"• 發布時間：" + Utf8ToWide(res.latest.published_at) + L"\r\n")) +
-                    L"\r\n是否開啟 GitHub Releases 網頁查看完整歷史更新日誌？";
-                if (MessageBoxW(hwnd_, msg.c_str(), L"已是最新版本", MB_ICONINFORMATION | MB_YESNO) == IDYES) {
+                         : (std::wstring(T(L"• 發布時間：", L"• Published: ")) +
+                            Utf8ToWide(res.latest.published_at) + L"\r\n")) +
+                    T(L"\r\n是否開啟 GitHub Releases 網頁查看完整歷史更新日誌？",
+                      L"\r\nOpen GitHub Releases in your browser to view the full changelog?");
+                if (MessageBoxW(
+                        hwnd_,
+                        msg.c_str(),
+                        T(L"已是最新版本", L"Up to Date"),
+                        MB_ICONINFORMATION | MB_YESNO) == IDYES) {
                     OpenSafeGitHubWebUrl(hwnd_, res.latest.html_url);
                 }
             }
             return;
         }
 
-        std::wstring up_lbl = L"⬆️ 升級 " + Utf8ToWide(res.latest.tag_name);
+        std::wstring up_lbl = std::wstring(T(L"⬆️ 升級 ", L"⬆️ Update ")) + Utf8ToWide(res.latest.tag_name);
         SetWindowTextW(btn_update_, up_lbl.c_str());
         InvalidateRect(hwnd_, &banner_rect_, FALSE);
         AppendLogLine(
-            L"[發現新版本] 🎉 GitHub 已發布 JCast for iOS " + Utf8ToWide(res.latest.tag_name) +
-            L"！點擊「" + up_lbl + L"」即可檢視更新日誌並一鍵自動升級。");
+            std::wstring(T(L"[發現新版本] 🎉 GitHub 已發布 JCast for iOS ",
+                           L"[Update Available] 🎉 JCast for iOS ")) +
+            Utf8ToWide(res.latest.tag_name) +
+            T(L"！點擊「", L" is available! Click '") + up_lbl +
+            T(L"」即可檢視更新日誌並一鍵自動升級。", L"' to view release notes and auto-upgrade."));
 
         if (manual_trigger && !host_running_.load(std::memory_order_acquire)) {
             OpenUpdateDialog(cached_update_);
@@ -3609,6 +4008,7 @@ private:
         int h = telemetry_rect_.bottom - telemetry_rect_.top;
         if (w <= 8 || h <= 8) return;
 
+        const bool en = (lang_ == AppLanguage::EnUS);
         UINT dpi = GetSystemDpiSafe(hwnd_);
         HDC mem_dc = CreateCompatibleDC(dst_hdc);
         HBITMAP mem_bmp = CreateCompatibleBitmap(dst_hdc, w, h);
@@ -3646,11 +4046,11 @@ private:
         // --- Card 0: Real-time FPS + Sparkline ---
         COLORREF fps_col = RGB(100, 116, 139);
         std::wstring fps_val = L"--.- fps";
-        std::wstring fps_sub = L"目標 60fps 低抖動輸出";
+        std::wstring fps_sub = T(L"目標 60fps 低抖動輸出", L"Target 60fps low-jitter output");
         if (s.waiting_first_frame) {
             fps_col = RGB(251, 191, 36);
-            fps_val = L"等待中...";
-            fps_sub = L"等待手機傳送首張影格";
+            fps_val = T(L"等待中...", L"Waiting...");
+            fps_sub = T(L"等待手機傳送首張影格", L"Waiting for first frame");
         } else if (streaming) {
             wchar_t vbuf[48] = {0};
             std::swprintf(vbuf, 48, L"%.1f fps", s.fps);
@@ -3668,7 +4068,7 @@ private:
             std::swprintf(
                 sbuf,
                 80,
-                L"累計 %llu 幀 ｜ 掉幀 %u",
+                en ? L"Total %llu f | Drop %u" : L"累計 %llu 幀 ｜ 掉幀 %u",
                 static_cast<unsigned long long>(s.total_frames),
                 s.dropped_frames);
             fps_sub = sbuf;
@@ -3679,7 +4079,7 @@ private:
             SelectObject(mem_dc, font_small_);
             SetTextColor(mem_dc, RGB(148, 163, 184));
             RECT hdr_rc{x0 + pad_x, Scale(6, dpi), x1 - Scale(64, dpi), Scale(23, dpi)};
-            DrawTextW(mem_dc, L"🎞 即時幀率", -1, &hdr_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            DrawTextW(mem_dc, T(L"🎞 即時幀率", L"🎞 Live FPS"), -1, &hdr_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
             RECT spk_rc{x1 - Scale(60, dpi), Scale(6, dpi), x1 - Scale(8, dpi), Scale(23, dpi)};
             DrawSparklineGdi(mem_dc, spk_rc, fps_history_, 65.0, fps_col);
@@ -3698,17 +4098,22 @@ private:
         // --- Card 1: Real-time Bitrate Mbps + Sparkline ---
         COLORREF mbps_col = streaming ? RGB(56, 189, 248) : RGB(100, 116, 139);
         std::wstring mbps_val = L"--.- Mbps";
-        std::wstring mbps_sub = L"USB 動態高畫質 H.264";
+        std::wstring mbps_sub = T(L"USB 動態高畫質 H.264", L"Dynamic USB H.264 stream");
         if (s.waiting_first_frame) {
             mbps_val = L"0.0 Mbps";
-            mbps_sub = L"握手協調串流通道中";
+            mbps_sub = T(L"握手協調串流通道中", L"Negotiating USB stream");
         } else if (streaming) {
             wchar_t vbuf[48] = {0};
             std::swprintf(vbuf, 48, L"%.1f Mbps", s.bitrate_mbps);
             mbps_val = vbuf;
             std::wstring tot_str = FormatBytesCompactWide(s.total_video_bytes);
             wchar_t sbuf[96] = {0};
-            std::swprintf(sbuf, 96, L"峰值 %.1fM ｜ 累計 %ls", s.peak_bitrate_mbps, tot_str.c_str());
+            std::swprintf(
+                sbuf,
+                96,
+                en ? L"Peak %.1fM | Total %ls" : L"峰值 %.1fM ｜ 累計 %ls",
+                s.peak_bitrate_mbps,
+                tot_str.c_str());
             mbps_sub = sbuf;
         }
         draw_card_frame(1, streaming ? mbps_col : RGB(51, 65, 85));
@@ -3717,7 +4122,7 @@ private:
             SelectObject(mem_dc, font_small_);
             SetTextColor(mem_dc, RGB(148, 163, 184));
             RECT hdr_rc{x0 + pad_x, Scale(6, dpi), x1 - Scale(64, dpi), Scale(23, dpi)};
-            DrawTextW(mem_dc, L"📡 傳輸碼率", -1, &hdr_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            DrawTextW(mem_dc, T(L"📡 傳輸碼率", L"📡 Bitrate"), -1, &hdr_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
             RECT spk_rc{x1 - Scale(60, dpi), Scale(6, dpi), x1 - Scale(8, dpi), Scale(23, dpi)};
             double spk_max = std::max(12.0, s.peak_bitrate_mbps * 1.15);
@@ -3737,7 +4142,7 @@ private:
         // --- Card 2: Decode & Pipeline Latency (ms) + Engine Pill ---
         COLORREF lat_col = RGB(100, 116, 139);
         std::wstring lat_val = L"--.- ms";
-        std::wstring lat_sub = L"H.264 解碼 + 畫布處理";
+        std::wstring lat_sub = T(L"H.264 解碼 + 畫布處理", L"H.264 decode + canvas");
         if (streaming) {
             wchar_t vbuf[48] = {0};
             std::swprintf(vbuf, 48, L"%.1f ms", s.pipeline_latency_ms);
@@ -3751,7 +4156,12 @@ private:
             }
             int budget_pct = std::clamp(static_cast<int>(s.pipeline_latency_ms * 100.0 / 16.667 + 0.5), 1, 999);
             wchar_t sbuf[96] = {0};
-            std::swprintf(sbuf, 96, L"純解碼 %.1fms ｜ 60幀預算 %d%%", s.decode_latency_ms, budget_pct);
+            std::swprintf(
+                sbuf,
+                96,
+                en ? L"Dec %.1fms | 60fps %d%%" : L"純解碼 %.1fms ｜ 60幀預算 %d%%",
+                s.decode_latency_ms,
+                budget_pct);
             lat_sub = sbuf;
         }
         draw_card_frame(2, streaming ? lat_col : RGB(51, 65, 85));
@@ -3760,10 +4170,12 @@ private:
             SelectObject(mem_dc, font_small_);
             SetTextColor(mem_dc, RGB(148, 163, 184));
             RECT hdr_rc{x0 + pad_x, Scale(6, dpi), x1 - Scale(66, dpi), Scale(23, dpi)};
-            DrawTextW(mem_dc, L"⚡ 解碼延遲", -1, &hdr_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            DrawTextW(mem_dc, T(L"⚡ 解碼延遲", L"⚡ Latency"), -1, &hdr_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
             if (streaming) {
-                const wchar_t* eng_txt = s.mock_source ? L"自測" : (s.hw_accelerated ? L"D3D11VA" : L"CPU軟解");
+                const wchar_t* eng_txt = s.mock_source
+                                             ? T(L"自測", L"Mock")
+                                             : (s.hw_accelerated ? L"D3D11VA" : T(L"CPU軟解", L"CPU SW"));
                 COLORREF pill_bg = s.mock_source
                                        ? RGB(14, 58, 78)
                                        : (s.hw_accelerated ? RGB(14, 68, 44) : RGB(84, 52, 12));
@@ -3791,27 +4203,29 @@ private:
 
         // --- Card 3: Overall Stream Health Grade, Fault Alert & Click-to-Diagnose ---
         COLORREF grd_col = RGB(148, 163, 184);
-        std::wstring grd_val = L"⚪ 待機未啟動";
-        std::wstring grd_sub = L"點擊開啟 8 項環境自檢與報錯";
+        std::wstring grd_val = T(L"⚪ 待機未啟動", L"⚪ Idle / Standby");
+        std::wstring grd_sub = T(L"點擊開啟 8 項環境自檢與報錯", L"Click for 8-point self-check");
         switch (s.grade) {
             case StreamHealthGrade::Excellent:
                 grd_col = RGB(74, 222, 128);
-                grd_val = s.mock_source ? L"🟢 極佳 (自測)" : L"🟢 極佳 · 低延遲";
+                grd_val = s.mock_source
+                              ? T(L"🟢 極佳 (自測)", L"🟢 Optimal (Mock)")
+                              : T(L"🟢 極佳 · 低延遲", L"🟢 Optimal · Low Lag");
                 break;
             case StreamHealthGrade::StaticVfr:
                 grd_col = RGB(96, 165, 250);
-                grd_val = L"🔵 靜態省電 VFR";
+                grd_val = T(L"🔵 靜態省電 VFR", L"🔵 Static Idle VFR");
                 break;
             case StreamHealthGrade::Warning:
                 grd_col = RGB(251, 191, 36);
                 grd_val = (s.pipeline_latency_ms > 14.0 || s.decode_latency_ms > 12.0)
-                              ? L"🟡 解碼負載偏高"
-                              : L"🟡 幀率/頻寬受限";
+                              ? T(L"🟡 解碼負載偏高", L"🟡 High Decode Load")
+                              : T(L"🟡 幀率/頻寬受限", L"🟡 FPS / BW Limited");
                 break;
             case StreamHealthGrade::WaitingStream:
                 grd_col = RGB(251, 191, 36);
-                grd_val = L"⏳ 等待手機訊號";
-                grd_sub = L"請解鎖手機並點信任電腦";
+                grd_val = T(L"⏳ 等待手機訊號", L"⏳ Waiting for iOS");
+                grd_sub = T(L"請解鎖手機並點信任電腦", L"Unlock & tap Trust on phone");
                 break;
             case StreamHealthGrade::Idle:
             default:
@@ -3819,15 +4233,15 @@ private:
         }
         if (streaming) {
             if (s.grade == StreamHealthGrade::StaticVfr) {
-                grd_sub = L"畫面靜止自動降頻 (滑動即60幀)";
+                grd_sub = T(L"畫面靜止自動降頻 (滑動即60幀)", L"Static screen VFR (60fps on move)");
             } else if (s.grade == StreamHealthGrade::Warning && !s.hw_accelerated) {
-                grd_sub = L"建議勾選開啟 D3D11VA 硬解";
+                grd_sub = T(L"建議勾選開啟 D3D11VA 硬解", L"Enable D3D11VA GPU decode");
             } else {
                 wchar_t sbuf[96] = {0};
                 std::swprintf(
                     sbuf,
                     96,
-                    L"%u×%u ｜ 音訊 %llu 包",
+                    en ? L"%u×%u | Aud %llu pkts" : L"%u×%u ｜ 音訊 %llu 包",
                     s.frame_width,
                     s.frame_height,
                     static_cast<unsigned long long>(s.total_audio_packets));
@@ -3844,13 +4258,15 @@ private:
                  latest_f.code == DiagCode::E501_AudioEndpointLost);
             if (!streaming || stream_runtime_fault || latest_f.severity >= DiagSeverity::Error) {
                 highlight_fault_on_card = true;
-                const auto& fspec = LookupDiagSpec(latest_f.code);
+                const auto& fspec = LookupDiagSpec(latest_f.code, lang_);
                 grd_col = (latest_f.severity >= DiagSeverity::Error)
                               ? RGB(248, 113, 113)
                               : RGB(251, 191, 36);
-                grd_val = ((latest_f.severity >= DiagSeverity::Error) ? L"❌ 錯誤 " : L"⚠️ 異常 ") +
+                grd_val = std::wstring((latest_f.severity >= DiagSeverity::Error)
+                                           ? T(L"❌ 錯誤 ", L"❌ Error ")
+                                           : T(L"⚠️ 異常 ", L"⚠️ Alert ")) +
                           Utf8ToWide(fspec.code_str);
-                grd_sub = L"點擊開啟診斷中心查看解法";
+                grd_sub = T(L"點擊開啟診斷中心查看解法", L"Click to view fix & report");
             }
         }
 
@@ -3860,7 +4276,12 @@ private:
             SelectObject(mem_dc, font_small_);
             SetTextColor(mem_dc, RGB(148, 163, 184));
             RECT hdr_rc{x0 + pad_x, Scale(6, dpi), x1 - pad_x, Scale(23, dpi)};
-            DrawTextW(mem_dc, L"🩺 健康度診斷 (點擊自檢)", -1, &hdr_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            DrawTextW(
+                mem_dc,
+                T(L"🩺 健康度診斷 (點擊自檢)", L"🩺 Health (Click Diag)"),
+                -1,
+                &hdr_rc,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
             SelectObject(mem_dc, font_bold_);
             SetTextColor(mem_dc, grd_col);
@@ -3918,11 +4339,13 @@ private:
         }
 
         std::wstring idle_title = inline_preview_enabled_
-                                      ? L"🎬 低負載即時預覽待命中"
-                                      : L"⏸ 已暫停內建預覽（0% 額外負載）";
+                                      ? T(L"🎬 低負載即時預覽待命中", L"🎬 Low-Load Live Preview Standby")
+                                      : T(L"⏸ 已暫停內建預覽（0% 額外負載）", L"⏸ Inline Preview Paused (0% Extra Load)");
         std::wstring idle_sub = inline_preview_enabled_
-                                    ? L"啟動投影後自動顯示（雙擊畫面開啟大視窗）"
-                                    : L"OBS 虛擬擷取卡與「📸 原畫質截圖」仍正常運作";
+                                    ? T(L"啟動投影後自動顯示（雙擊畫面開啟大視窗）",
+                                        L"Auto-starts with capture (Double-click to pop out)")
+                                    : T(L"OBS 虛擬擷取卡與「📸 原畫質截圖」仍正常運作",
+                                        L"OBS virtual camera & F12 Snapshot remain active");
 
         DrawPreviewCanvasGdi(
             hdc,
@@ -3948,11 +4371,14 @@ private:
         std::vector<uint8_t> full_bgra;
         uint32_t w = 0, h = 0;
         if (!preview_shm_.CaptureLatestFullResBGRA32(full_bgra, w, h)) {
-            AppendLogLine(L"[截圖提示] 目前尚無擷取畫面，請先點擊「🚀 智慧一鍵啟動」或「🧪 免手機自測」後再截圖。");
+            AppendLogLine(T(
+                L"[截圖提示] 目前尚無擷取畫面，請先點擊「🚀 智慧一鍵啟動」或「🧪 免手機自測」後再截圖。",
+                L"[Screenshot] No active video frame yet. Click 'Smart Start' or 'Mock Test' first."));
             if (live_monitor_ && source_hwnd == live_monitor_->Hwnd()) {
-                live_monitor_->ShowToast(L"⚠️ 尚無投影訊號可截圖，請先啟動投影", 2200);
+                live_monitor_->ShowToast(
+                    T(L"⚠️ 尚無投影訊號可截圖，請先啟動投影", L"⚠️ No live signal to capture yet"), 2200);
             } else {
-                ShowInlineToast(L"⚠️ 尚無投影訊號可截圖", 2200);
+                ShowInlineToast(T(L"⚠️ 尚無投影訊號可截圖", L"⚠️ No live signal yet"), 2200);
             }
             return;
         }
@@ -3966,20 +4392,27 @@ private:
         bool clip_ok = CopyTopDownBGRA32ToClipboard(clip_owner, full_bgra.data(), w, h);
 
         if (png_ok) {
-            std::wstring toast = L"📸 已截圖 " + std::to_wstring(w) + L"×" + std::to_wstring(h) +
-                                 (clip_ok ? L" (PNG + 已複製剪貼簿)" : L" (已存 PNG)");
+            std::wstring toast =
+                std::wstring(T(L"📸 已截圖 ", L"📸 Captured ")) + std::to_wstring(w) + L"×" + std::to_wstring(h) +
+                (clip_ok ? T(L" (PNG + 已複製剪貼簿)", L" (PNG + Clipboard)")
+                         : T(L" (已存 PNG)", L" (PNG Saved)"));
             ShowInlineToast(toast, 2500);
             if (live_monitor_ && live_monitor_->IsOpen()) {
                 live_monitor_->ShowToast(toast, 2500);
             }
             AppendLogLine(
-                L"[原畫質截圖] 📸 已儲存 1:1 無損 PNG (" + std::to_wstring(w) + L"×" + std::to_wstring(h) + L")" +
-                (clip_ok ? L" 並複製至剪貼簿 (可直接 Ctrl+V 貼上)" : L"") + L"：" + png_path.wstring());
+                std::wstring(T(L"[原畫質截圖] 📸 已儲存 1:1 無損 PNG (",
+                               L"[Screenshot] 📸 Saved 1:1 lossless PNG (")) +
+                std::to_wstring(w) + L"×" + std::to_wstring(h) + L")" +
+                (clip_ok ? T(L" 並複製至剪貼簿 (可直接 Ctrl+V 貼上)", L" & copied to clipboard (Ctrl+V ready)") : L"") +
+                L": " + png_path.wstring());
         } else {
-            AppendLogLine(L"[截圖失敗] 無法寫入 PNG 檔案：" + Utf8ToWide(err));
-            ShowInlineToast(L"❌ 截圖儲存失敗", 2500);
+            AppendLogLine(
+                std::wstring(T(L"[截圖失敗] 無法寫入 PNG 檔案：", L"[Screenshot Failed] Unable to save PNG: ")) +
+                Utf8ToWide(err));
+            ShowInlineToast(T(L"❌ 截圖儲存失敗", L"❌ Screenshot save failed"), 2500);
             if (live_monitor_ && live_monitor_->IsOpen()) {
-                live_monitor_->ShowToast(L"❌ 截圖儲存失敗", 2500);
+                live_monitor_->ShowToast(T(L"❌ 截圖儲存失敗", L"❌ Screenshot save failed"), 2500);
             }
         }
     }
@@ -4088,6 +4521,20 @@ private:
                     user_manually_picked_res_ = true;
                     return 0;
                 }
+                if (code == CBN_SELCHANGE && id == kIdComboLanguage) {
+                    LRESULT sel = SendMessageW(combo_language_, CB_GETCURSEL, 0, 0);
+                    AppLanguagePref next_pref = AppLanguagePref::Auto;
+                    if (sel == 1) next_pref = AppLanguagePref::ZhTW;
+                    else if (sel == 2) next_pref = AppLanguagePref::EnUS;
+                    lang_pref_ = next_pref;
+                    SaveLanguagePref(lang_pref_);
+                    lang_ = ResolveEffectiveLanguage(lang_pref_, static_cast<uint16_t>(GetUserDefaultUILanguage()));
+                    ApplyLanguageToUi();
+                    AppendLogLine(T(
+                        L"[語言設定] 🌐 已切換介面語言為「繁體中文」（設定已自動儲存）。",
+                        L"[Language] 🌐 Interface language switched to English (preference saved)."));
+                    return 0;
+                }
                 if (code == BN_CLICKED) {
                     if (id == kIdChkInlinePreview) {
                         inline_preview_enabled_ =
@@ -4113,9 +4560,10 @@ private:
                     }
                     if (id == kIdBtnSmartStart) {
                         if (host_running_.load(std::memory_order_acquire)) {
-                            AppendLogLine(L"[操作] 正在停止投影擷取並恢復標準 USB 模式...");
+                            AppendLogLine(T(L"[操作] 正在停止投影擷取並恢復標準 USB 模式...",
+                                            L"[Action] Stopping capture and restoring normal USB mode..."));
                             StopHostProcess();
-                            AppendLogLine(L"[完成] 已停止投影擷取。");
+                            AppendLogLine(T(L"[完成] 已停止投影擷取。", L"[Done] Capture stopped."));
                         } else {
                             StartHostProcess(false);
                         }
@@ -4124,7 +4572,7 @@ private:
                     if (id == kIdBtnMockTest) {
                         if (host_running_.load(std::memory_order_acquire)) {
                             StopHostProcess();
-                            AppendLogLine(L"[完成] 已停止自測訊號。");
+                            AppendLogLine(T(L"[完成] 已停止自測訊號。", L"[Done] Mock test signal stopped."));
                         } else {
                             StartHostProcess(true);
                         }
@@ -4153,14 +4601,16 @@ private:
                     if (id == kIdBtnUninstall) {
                         if (MessageBoxW(
                                 hwnd_,
-                                L"確定要移除 Apple USB 過濾層並反註冊 JCast for iOS 虛擬擷取卡嗎？",
-                                L"確認解除安裝",
+                                T(L"確定要移除 Apple USB 過濾層並反註冊 JCast for iOS 虛擬擷取卡嗎？",
+                                  L"Remove the Apple USB filter driver and unregister the JCast for iOS virtual capture card?"),
+                                T(L"確認解除安裝", L"Confirm Uninstall"),
                                 MB_ICONQUESTION | MB_YESNO) == IDYES) {
                             if (host_running_.load(std::memory_order_acquire)) {
                                 StopHostProcess();
                             }
                             if (RunDriverSetupElevated(L"--uninstall")) {
-                                AppendLogLine(L"[完成] 已完整移除驅動過濾層與虛擬擷取卡註冊。");
+                                AppendLogLine(T(L"[完成] 已完整移除驅動過濾層與虛擬擷取卡註冊。",
+                                                L"[Done] Driver filter and virtual capture card removed cleanly."));
                             }
                         }
                         return 0;
@@ -4195,14 +4645,14 @@ private:
                 bool manual_stop = (lParam != 0);
                 if (host_running_.load(std::memory_order_acquire)) {
                     StopHostProcess();
-                    AppendLogLine(L"[狀態] 擷取背景程序已結束。");
+                    AppendLogLine(T(L"[狀態] 擷取背景程序已結束。", L"[Status] Background capture process exited."));
                 }
                 if (!manual_stop && !shutting_down_.load(std::memory_order_acquire) && exit_code != 0) {
                     if (!session_critical_fault_seen_) {
                         RecordDiagnosticFault(
                             DiagCode::E503_HostUnexpectedExit,
                             DiagSeverity::Critical,
-                            Utf8ToWide(DescribeProcessExitCode(exit_code)),
+                            Utf8ToWide(DescribeProcessExitCode(exit_code, lang_)),
                             true);
                     } else {
                         OpenDiagnosticsModal();
@@ -4259,6 +4709,8 @@ private:
     HINSTANCE hinst_ = nullptr;
     HWND hwnd_ = nullptr;
     std::filesystem::path base_dir_;
+    AppLanguagePref lang_pref_ = AppLanguagePref::Auto;
+    AppLanguage lang_ = AppLanguage::ZhTW;
     SystemHealth health_;
     IosUsbState prev_ios_usb_ = IosUsbState::Unplugged;
     UsbLinkSpeed detected_usb_speed_ = UsbLinkSpeed::Unknown;
@@ -4272,9 +4724,17 @@ private:
     RECT banner_rect_{};
     RECT telemetry_rect_{};
     RECT preview_rect_{};
+    HWND grp_pref_ = nullptr;
+    HWND lbl_res_ = nullptr;
+    HWND lbl_bar_ = nullptr;
+    HWND lbl_aud_ = nullptr;
+    HWND lbl_lang_ = nullptr;
+    HWND grp_act_ = nullptr;
+    HWND lbl_log_ = nullptr;
     HWND combo_res_mode_ = nullptr;
     HWND combo_status_bar_ = nullptr;
     HWND combo_audio_ = nullptr;
+    HWND combo_language_ = nullptr;
     HWND chk_hw_decode_ = nullptr;
     HWND chk_inline_preview_ = nullptr;
     HWND btn_smart_start_ = nullptr;

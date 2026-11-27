@@ -4,6 +4,18 @@
 
 ---
 
+## [v1.9.0] - 2026-11-27 — 介面語言設定選項（繁體中文 / English 即時切換）
+
+### ✨ 新增功能 (Added)
+- **多語系偏好引擎與免管理員權限持久化 (`app_lang.h` / `app_lang.cpp`)**：
+  - 支援 **「🌐 自動 (跟隨系統) / Auto (System)」**、**「繁體中文」** 與 **「English」** 三種設定模式；自動模式會依 Windows `GetUserDefaultUILanguage()` 智慧對應顯示語系，手動偏好安全儲存於 `HKCU\Software\JCastForiOS\Language`（安裝版與免安裝便攜版皆免 UAC 權限讀寫）。
+- **控制台「🌐 語言 / Language」下拉選單與免重啟即時切換 (`ApplyLanguageToUi`)**：
+  - 切換語言後立即無縫更新主控制台標題、所有按鈕／核取方塊、狀態橫幅、解析度／狀態列／音訊下拉選項（完整保留目前選取項目）、4 欄式串流健康度儀表板，以及已開啟的 **`JCast Live Monitor` 獨立大視窗**（標題列、全螢幕 HUD、右鍵選單），即使在投影擷取途中切換亦絕不中斷直播。
+- **全介面 100% 雙語化（繁體中文 / English）**：
+  - 包含 18 組故障錯誤碼 (`JCAST-E101` ～ `JCAST-E503`) 完整英文根因解析與修復步驟、8 項系統自檢報告、Windows 程序結束碼翻譯、GitHub Issue 一鍵報錯範本、OBS 設定教學與 GitHub 自動更新視窗 (`UpdateModalWindow`)。
+
+---
+
 ## [v1.8.0] - 2026-11-27 — 智慧故障偵測、GPU 自動軟解自癒與一鍵隱私脫敏報錯中心
 
 ### ✨ 新增功能 (Added)

@@ -706,7 +706,7 @@ bool TestFaultDiagnosticsAndRedaction() {
     std::string gh_url = BuildGitHubNewIssueUrl(
         "joey971018yt",
         "iOS-usb-cam",
-        "1.8.0",
+        "1.9.0",
         DiagCode::E301_IosNotTrustedOrLocked,
         "User C:\\Users\\Alice\\Desktop Serial=00008130-0011223344556677");
     ASSERT_TRUE(
@@ -720,10 +720,100 @@ bool TestFaultDiagnosticsAndRedaction() {
     return true;
 }
 
+bool TestLanguageSettingsAndEnglishLocalization() {
+    // 1. Config value serialization & case-insensitive parsing
+    ASSERT_TRUE(std::string(LanguagePrefToConfigValue(AppLanguagePref::Auto)) == "auto",
+                "Auto config value mismatch");
+    ASSERT_TRUE(std::string(LanguagePrefToConfigValue(AppLanguagePref::ZhTW)) == "zh-TW",
+                "ZhTW config value mismatch");
+    ASSERT_TRUE(std::string(LanguagePrefToConfigValue(AppLanguagePref::EnUS)) == "en-US",
+                "EnUS config value mismatch");
+
+    ASSERT_TRUE(ParseLanguagePrefValue("en-US") == AppLanguagePref::EnUS, "Parse en-US failed");
+    ASSERT_TRUE(ParseLanguagePrefValue("English") == AppLanguagePref::EnUS, "Parse English failed");
+    ASSERT_TRUE(ParseLanguagePrefValue("zh-TW") == AppLanguagePref::ZhTW, "Parse zh-TW failed");
+    ASSERT_TRUE(ParseLanguagePrefValue("zh_Hant") == AppLanguagePref::Auto ||
+                    ParseLanguagePrefValue("zh-Hant") == AppLanguagePref::ZhTW,
+                "Parse zh-Hant failed");
+    ASSERT_TRUE(ParseLanguagePrefValue("auto") == AppLanguagePref::Auto, "Parse auto failed");
+    ASSERT_TRUE(ParseLanguagePrefValue("") == AppLanguagePref::Auto, "Empty string must fall back to Auto");
+
+    // 2. Effective language resolution against Windows UI LANGIDs
+    // 0x0404 = zh-TW, 0x0804 = zh-CN, 0x0409 = en-US, 0x0411 = ja-JP
+    ASSERT_TRUE(ResolveEffectiveLanguage(AppLanguagePref::Auto, 0x0404U) == AppLanguage::ZhTW,
+                "Auto + zh-TW LANGID must resolve to ZhTW");
+    ASSERT_TRUE(ResolveEffectiveLanguage(AppLanguagePref::Auto, 0x0409U) == AppLanguage::EnUS,
+                "Auto + en-US LANGID must resolve to EnUS");
+    ASSERT_TRUE(ResolveEffectiveLanguage(AppLanguagePref::Auto, 0x0411U) == AppLanguage::EnUS,
+                "Auto + non-Chinese LANGID must resolve to EnUS");
+    ASSERT_TRUE(ResolveEffectiveLanguage(AppLanguagePref::EnUS, 0x0404U) == AppLanguage::EnUS,
+                "Explicit EnUS preference must override zh-TW OS locale");
+    ASSERT_TRUE(ResolveEffectiveLanguage(AppLanguagePref::ZhTW, 0x0409U) == AppLanguage::ZhTW,
+                "Explicit ZhTW preference must override en-US OS locale");
+
+    // 3. Bilingual text selector helpers
+    ASSERT_TRUE(std::wstring(LText(AppLanguage::ZhTW, L"設定", L"Settings")) == L"設定",
+                "LText ZhTW mismatch");
+    ASSERT_TRUE(std::wstring(LText(AppLanguage::EnUS, L"設定", L"Settings")) == L"Settings",
+                "LText EnUS mismatch");
+    ASSERT_TRUE(std::string(LTextUtf8(AppLanguage::EnUS, "中文", "English")) == "English",
+                "LTextUtf8 EnUS mismatch");
+
+    // 4. Verify all 18 diagnostic specs exist in English and differ from ZhTW
+    const DiagCode kAllCodes[] = {
+        DiagCode::E101_MissingCoreFiles,
+        DiagCode::E102_MissingAppleService,
+        DiagCode::E103_MissingMediaFoundation,
+        DiagCode::E104_DshowNotRegistered,
+        DiagCode::E201_ZadigDriverConflict,
+        DiagCode::E202_UpperFilterMissing,
+        DiagCode::E203_UsbOpenAccessDenied,
+        DiagCode::E204_UsbInterfaceBusy,
+        DiagCode::E301_IosNotTrustedOrLocked,
+        DiagCode::E302_SetConfigFailed,
+        DiagCode::E303_HandshakeNoFrames,
+        DiagCode::E304_UsbTransferIoDrop,
+        DiagCode::E401_DecoderInitFailed,
+        DiagCode::E402_GpuFallbackToSoftware,
+        DiagCode::E403_HighDecodeLatency,
+        DiagCode::E501_AudioEndpointLost,
+        DiagCode::E502_SharedMemInitFailed,
+        DiagCode::E503_HostUnexpectedExit,
+    };
+    for (DiagCode dc : kAllCodes) {
+        const auto& sp_zh = LookupDiagSpec(dc, AppLanguage::ZhTW);
+        const auto& sp_en = LookupDiagSpec(dc, AppLanguage::EnUS);
+        ASSERT_TRUE(sp_en.code == dc && std::strcmp(sp_en.code_str, sp_zh.code_str) == 0,
+                    "English DiagCodeSpec code_str mismatch");
+        ASSERT_TRUE(std::strlen(sp_en.title_utf8) > 8 && std::strlen(sp_en.cause_utf8) > 12 &&
+                        std::strlen(sp_en.fix_steps_utf8) > 12,
+                    "English DiagCodeSpec text too short");
+        ASSERT_TRUE(std::strcmp(sp_en.title_utf8, sp_zh.title_utf8) != 0,
+                    "English DiagCodeSpec title must be translated into English");
+    }
+
+    // 5. English exit code & GitHub Issue URL
+    std::string exit_en = DescribeProcessExitCode(0xC0000135U, AppLanguage::EnUS);
+    ASSERT_TRUE(exit_en.find("missing required system DLL") != std::string::npos,
+                "English exit code description mismatch");
+    std::string issue_en = BuildGitHubNewIssueUrl(
+        "joey971018yt",
+        "iOS-usb-cam",
+        "1.9.0",
+        DiagCode::E201_ZadigDriverConflict,
+        "Conflict",
+        AppLanguage::EnUS);
+    ASSERT_TRUE(issue_en.find("Bug%20Report") != std::string::npos &&
+                    issue_en.find("JCAST-E201") != std::string::npos,
+                "English GitHub Issue URL must use English title & error code");
+
+    return true;
+}
+
 }  // namespace
 
 int main() {
-    std::cout << "[JCast for iOS] Running protocol, USB speed, updater, preview, screenshot, telemetry & diagnostics tests...\n";
+    std::cout << "[JCast for iOS] Running protocol, USB speed, updater, preview, screenshot, telemetry, diagnostics & language tests...\n";
     if (!TestExactQuickTimeHexVectors()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestExactQuickTimeHexVectors\n";
     if (!TestSpsResolutionAndAvccConversion()) return EXIT_FAILURE;
@@ -742,6 +832,8 @@ int main() {
     std::cout << "  [PASS] TestStreamHealthTelemetryAndGrading\n";
     if (!TestFaultDiagnosticsAndRedaction()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestFaultDiagnosticsAndRedaction\n";
+    if (!TestLanguageSettingsAndEnglishLocalization()) return EXIT_FAILURE;
+    std::cout << "  [PASS] TestLanguageSettingsAndEnglishLocalization\n";
     std::cout << "[JCast for iOS] All tests passed successfully!\n";
     return EXIT_SUCCESS;
 }
