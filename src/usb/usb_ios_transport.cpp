@@ -392,11 +392,13 @@ bool UsbIosTransport::OpenAndClaimQuickTimeInterface(const UsbTransportConfig& c
             UsbLinkSpeed dev_speed = ConvertRawLibUsbSpeed(raw_spd, desc.bcdUSB);
 
             libusb_device_handle* h = nullptr;
-            if (impl_->api.open(dev, &h) != 0 || !h) {
+            int open_rc = impl_->api.open(dev, &h);
+            if (open_rc != 0 || !h) {
                 if (out_error && out_error->empty()) {
+                    const char* sname = impl_->api.strerror ? impl_->api.strerror(open_rc) : "open error";
                     *out_error =
-                        "Found iPhone/iPad (VID 05AC), but libusb_open failed. Ensure install_all_admin.ps1 "
-                        "mounted the libusb0 UpperFilter driver and the phone is unlocked & trusted.";
+                        "Found iPhone/iPad (VID 05AC), but libusb_open failed (code " + std::to_string(open_rc) +
+                        ": " + sname + "). Ensure libusb0 UpperFilter is mounted and re-plug USB once.";
                 }
                 continue;
             }

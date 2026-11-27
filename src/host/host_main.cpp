@@ -1,4 +1,5 @@
 #include "ios_vcam/coremedia_codec.h"
+#include "ios_vcam/diagnostics.h"
 #include "ios_vcam/image_convert.h"
 #include "ios_vcam/mf_h264_decoder.h"
 #include "ios_vcam/qt_session.h"
@@ -281,7 +282,11 @@ int main(int argc, char** argv) {
 
     SharedCaptureProducer producer;
     if (!producer.Open(kDefaultShmName)) {
-        std::cerr << "[Error] Failed to create shared memory IPC (" << kDefaultShmName << ").\n";
+        std::cerr << FormatHostDiagLine(
+                         DiagCode::E502_SharedMemInitFailed,
+                         DiagSeverity::Critical,
+                         "無法建立跨行程共享記憶體 (" + std::string(kDefaultShmName) + ")。")
+                  << "\n";
 #ifdef _WIN32
         timeEndPeriod(1);
 #endif
@@ -322,7 +327,9 @@ int main(int argc, char** argv) {
     UsbIosTransport usb;
     std::string usb_err;
     if (!usb.Initialize(&usb_err)) {
-        std::cerr << "[USB Error] " << usb_err << "\n";
+        DiagCode ucode = ClassifyUsbOrTransportError(usb_err);
+        if (ucode == DiagCode::None) ucode = DiagCode::E101_MissingCoreFiles;
+        std::cerr << FormatHostDiagLine(ucode, DiagSeverity::Critical, usb_err) << "\n";
         audio_router.Stop();
         producer.Close();
 #ifdef _WIN32
@@ -342,6 +349,8 @@ int main(int argc, char** argv) {
     }
     std::cout << ", Status bar: " << (opts.clean_status_bar ? "clean native" : "QuickTime Valeria") << ")...\n";
 
+    DiagCode last_open_diag = DiagCode::None;
+
     while (!g_stop_flag.load(std::memory_order_relaxed)) {
         producer.TouchHeartbeat(false);
 
@@ -351,7 +360,15 @@ int main(int argc, char** argv) {
         if (!usb.OpenAndClaimQuickTimeInterface(ucfg, &usb_err)) {
             static auto last_log = std::chrono::steady_clock::now() - std::chrono::seconds(10);
             auto now = std::chrono::steady_clock::now();
-            if (now - last_log >= std::chrono::seconds(4)) {
+            DiagCode cur_diag = ClassifyUsbOrTransportError(usb_err);
+            if (cur_diag != DiagCode::None && cur_diag != last_open_diag) {
+                last_open_diag = cur_diag;
+                DiagSeverity sev = (cur_diag == DiagCode::E301_IosNotTrustedOrLocked)
+                                       ? DiagSeverity::Warning
+                                       : DiagSeverity::Error;
+                std::cout << FormatHostDiagLine(cur_diag, sev, usb_err) << "\n";
+                last_log = now;
+            } else if (now - last_log >= std::chrono::seconds(5)) {
                 std::cout << "[USB] " << usb_err << "\n";
                 last_log = now;
             }
@@ -361,6 +378,7 @@ int main(int argc, char** argv) {
             }
             continue;
         }
+        last_open_diag = DiagCode::None;
 
         // Determine maximum resolution ceiling ONCE at session start (never auto-modified during streaming!)
         const UsbLinkSpeed conn_speed = usb.ConnectedLinkSpeed();
@@ -375,18 +393,59 @@ int main(int argc, char** argv) {
         MfH264Decoder decoder;
         std::string dec_err;
         if (!decoder.Initialize(opts.prefer_hw_decode, &dec_err)) {
-            std::cerr << "[Decoder Error] " << dec_err << "\n";
-            usb.CloseAndRestoreUsbMux();
-            break;
+            if (opts.prefer_hw_decode && decoder.Initialize(false, &dec_err)) {
+                std::cout << FormatHostDiagLine(
+                                 DiagCode::E402_GpuFallbackToSoftware,
+                                 DiagSeverity::Warning,
+                                 "GPU D3D11VA 硬體解碼初始化失敗，已自動切換為 CPU 軟體解碼模式。")
+                          << "\n";
+            } else {
+                std::cerr << FormatHostDiagLine(DiagCode::E401_DecoderInitFailed, DiagSeverity::Critical, dec_err)
+                          << "\n";
+                usb.CloseAndRestoreUsbMux();
+                audio_router.Stop();
+                producer.Close();
+#ifdef _WIN32
+                timeEndPeriod(1);
+#endif
+                return EXIT_FAILURE;
+            }
         }
         std::cout << "[Decoder] Windows Media Foundation H.264 MFT initialized ("
                   << (decoder.IsHardwareAccelerated() ? "D3D11VA Hardware GPU" : "CPU Software Fallback")
                   << ")\n";
 
-        const uint32_t session_flags =
+        std::atomic<uint32_t> session_flags{
             (decoder.IsHardwareAccelerated() ? kStreamFlagHwAccelerated : 0U) |
             ((opts.res_mode == ResolutionMode::NativeAdaptive) ? kStreamFlagAdaptiveRes : 0U) |
-            ((static_cast<uint32_t>(conn_speed) & 0xFU) << 8);
+            ((static_cast<uint32_t>(conn_speed) & 0xFU) << 8)};
+
+        std::atomic<bool> got_any_frame{false};
+        std::atomic<bool> session_done{false};
+        std::thread session_watchdog([&]() {
+            auto start_tp = std::chrono::steady_clock::now();
+            bool warned_no_frames = false;
+            while (!session_done.load(std::memory_order_acquire) &&
+                   !g_stop_flag.load(std::memory_order_relaxed)) {
+                producer.TouchHeartbeat(got_any_frame.load(std::memory_order_acquire));
+                if (!warned_no_frames && !got_any_frame.load(std::memory_order_acquire)) {
+                    double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_tp).count();
+                    if (sec >= 8.5) {
+                        warned_no_frames = true;
+                        std::cout << FormatHostDiagLine(
+                                         DiagCode::E303_HandshakeNoFrames,
+                                         DiagSeverity::Warning,
+                                         "USB 介面已連通但超過 8 秒未收到畫面封包：請確認手機已解鎖亮屏並點擊「信任」。")
+                                  << "\n";
+                    }
+                }
+                for (int k = 0; k < 5 && !session_done.load(std::memory_order_acquire) &&
+                                !g_stop_flag.load(std::memory_order_relaxed);
+                     ++k) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            }
+        });
 
         uint64_t console_frames = 0;
         uint64_t console_video_bytes = 0;
@@ -401,6 +460,8 @@ int main(int argc, char** argv) {
         uint32_t ema_dec_us = 0;
         uint32_t ema_pipe_us = 0;
         uint32_t decode_drops = 0;
+        uint32_t consecutive_dec_failures = 0;
+        bool warned_high_latency = false;
         bool latency_seeded = false;
         uint32_t last_src_w = 0, last_src_h = 0;
 
@@ -429,12 +490,17 @@ int main(int argc, char** argv) {
                 console_video_bytes += vpkt.annexb_data.size();
                 fast_video_bytes += vpkt.annexb_data.size();
 
+                bool emitted_frame = false;
                 bool dec_ok = decoder.DecodeAnnexB(
                     vpkt.annexb_data,
                     vpkt.pts_ns,
                     vpkt.width,
                     vpkt.height,
                     [&](const DecodedNV12View& view) {
+                        emitted_frame = true;
+                        got_any_frame.store(true, std::memory_order_release);
+                        consecutive_dec_failures = 0;
+
                         auto dec_t1 = std::chrono::steady_clock::now();
                         uint32_t cur_dec_us = static_cast<uint32_t>(
                             std::chrono::duration_cast<std::chrono::microseconds>(dec_t1 - pkt_t0).count());
@@ -512,11 +578,24 @@ int main(int argc, char** argv) {
                                 ema_pipe_us = (ema_pipe_us * 3U + cur_pipe_us) / 4U;
                             }
 
+                            if (!warned_high_latency && console_frames > 90 && ema_pipe_us > 17500U) {
+                                warned_high_latency = true;
+                                char lbuf[160] = {0};
+                                std::snprintf(
+                                    lbuf,
+                                    sizeof(lbuf),
+                                    "解碼管線平均耗時 %.1f ms 超過 60fps 預算 (16.7 ms)，建議確認開啟 GPU D3D11VA 硬解或調降解析度上限。",
+                                    ema_pipe_us / 1000.0);
+                                std::cout << FormatHostDiagLine(
+                                                 DiagCode::E403_HighDecodeLatency, DiagSeverity::Warning, lbuf)
+                                          << "\n";
+                            }
+
                             FrameTelemetryMeta meta{};
                             meta.fps_x100 = latest_fps_x100;
                             meta.decode_latency_us = ema_dec_us;
                             meta.pipeline_latency_us = ema_pipe_us;
-                            meta.stream_flags = session_flags;
+                            meta.stream_flags = session_flags.load(std::memory_order_relaxed);
                             meta.dropped_frames = decode_drops;
 
                             producer.PublishBackbufferSlot(
@@ -544,8 +623,26 @@ int main(int argc, char** argv) {
                             console_timer = now;
                         }
                     });
+
                 if (!dec_ok) {
                     ++decode_drops;
+                    ++consecutive_dec_failures;
+                    if (decoder.IsHardwareAccelerated() && consecutive_dec_failures >= 15U) {
+                        decoder.Shutdown();
+                        std::string fb_err;
+                        if (decoder.Initialize(false, &fb_err)) {
+                            consecutive_dec_failures = 0;
+                            uint32_t prev_f = session_flags.load(std::memory_order_relaxed);
+                            session_flags.store(prev_f & ~kStreamFlagHwAccelerated, std::memory_order_release);
+                            std::cout << FormatHostDiagLine(
+                                             DiagCode::E402_GpuFallbackToSoftware,
+                                             DiagSeverity::Warning,
+                                             "偵測到顯示卡 D3D11VA 硬體解碼連續異常，已自動熱切換至 CPU 軟體解碼維持直播不中斷！")
+                                      << "\n";
+                        }
+                    }
+                } else if (emitted_frame) {
+                    consecutive_dec_failures = 0;
                 }
             },
             [&](const DecodedPcmPacket& apkt) {
@@ -563,6 +660,11 @@ int main(int argc, char** argv) {
             [&](std::span<const uint8_t> usb_chunk) { return session.FeedUsbBytes(usb_chunk); },
             &loop_err);
 
+        session_done.store(true, std::memory_order_release);
+        if (session_watchdog.joinable()) {
+            session_watchdog.join();
+        }
+
         for (const auto& spkt : session.BuildStopPackets()) {
             usb.SendBulk(spkt);
         }
@@ -571,7 +673,16 @@ int main(int argc, char** argv) {
         usb.CloseAndRestoreUsbMux();
 
         if (!g_stop_flag.load(std::memory_order_relaxed)) {
-            std::cout << "[USB] Device disconnected (" << loop_err << "). Waiting for reconnect...\n";
+            DiagCode drop_code = ClassifyUsbOrTransportError(loop_err);
+            if (drop_code != DiagCode::None) {
+                std::cout << FormatHostDiagLine(
+                                 drop_code,
+                                 DiagSeverity::Warning,
+                                 "USB 裝置連線中斷 (" + loop_err + ")，正在自動等待重連...")
+                          << "\n";
+            } else {
+                std::cout << "[USB] Device disconnected (" << loop_err << "). Waiting for reconnect...\n";
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(800));
         }
     }

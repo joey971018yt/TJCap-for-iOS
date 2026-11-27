@@ -1,5 +1,6 @@
 #include "ios_vcam/app_updater.h"
 #include "ios_vcam/coremedia_codec.h"
+#include "ios_vcam/diagnostics.h"
 #include "ios_vcam/image_convert.h"
 #include "ios_vcam/qt_session.h"
 #include "ios_vcam/screenshot_util.h"
@@ -597,10 +598,132 @@ bool TestStreamHealthTelemetryAndGrading() {
     return true;
 }
 
+bool TestFaultDiagnosticsAndRedaction() {
+    // 1. Verify LookupDiagSpec covers all E101..E503 codes with non-empty Chinese root-cause & fix steps
+    const DiagCode kAllCodes[] = {
+        DiagCode::E101_MissingCoreFiles,
+        DiagCode::E102_MissingAppleService,
+        DiagCode::E103_MissingMediaFoundation,
+        DiagCode::E104_DshowNotRegistered,
+        DiagCode::E201_ZadigDriverConflict,
+        DiagCode::E202_UpperFilterMissing,
+        DiagCode::E203_UsbOpenAccessDenied,
+        DiagCode::E204_UsbInterfaceBusy,
+        DiagCode::E301_IosNotTrustedOrLocked,
+        DiagCode::E302_SetConfigFailed,
+        DiagCode::E303_HandshakeNoFrames,
+        DiagCode::E304_UsbTransferIoDrop,
+        DiagCode::E401_DecoderInitFailed,
+        DiagCode::E402_GpuFallbackToSoftware,
+        DiagCode::E403_HighDecodeLatency,
+        DiagCode::E501_AudioEndpointLost,
+        DiagCode::E502_SharedMemInitFailed,
+        DiagCode::E503_HostUnexpectedExit,
+    };
+    for (DiagCode dc : kAllCodes) {
+        const auto& sp = LookupDiagSpec(dc);
+        ASSERT_TRUE(sp.code == dc, "LookupDiagSpec code mismatch");
+        ASSERT_TRUE(std::strncmp(sp.code_str, "JCAST-E", 7) == 0, "DiagCodeSpec code_str prefix mismatch");
+        ASSERT_TRUE(std::strlen(sp.title_utf8) > 6 && std::strlen(sp.cause_utf8) > 10 &&
+                        std::strlen(sp.fix_steps_utf8) > 10,
+                    "DiagCodeSpec must have non-empty Chinese title, cause, and fix steps");
+        ASSERT_TRUE(ParseDiagCodeToken(sp.code_str) == dc, "ParseDiagCodeToken full JCAST-Exxx failed");
+        ASSERT_TRUE(ParseDiagCodeToken(sp.code_str + 6) == dc, "ParseDiagCodeToken short Exxx failed");
+    }
+
+    // 2. Verify FormatHostDiagLine -> ParseHostDiagLine structured IPC stdout roundtrip
+    {
+        std::string line = FormatHostDiagLine(
+            DiagCode::E402_GpuFallbackToSoftware,
+            DiagSeverity::Warning,
+            "D3D11VA TDR reset detected; switched seamlessly to CPU software decoder");
+        ASSERT_TRUE(line.rfind("[JCAST-DIAG|E402|WARN] ", 0) == 0, "FormatHostDiagLine header mismatch");
+        ParsedDiagEvent ev{};
+        ASSERT_TRUE(ParseHostDiagLine(line, ev), "ParseHostDiagLine failed on valid line");
+        ASSERT_TRUE(ev.code == DiagCode::E402_GpuFallbackToSoftware &&
+                        ev.severity == DiagSeverity::Warning &&
+                        ev.detail_utf8.find("D3D11VA TDR reset") != std::string::npos,
+                    "ParsedDiagEvent roundtrip fields mismatch");
+
+        ParsedDiagEvent normal_ev{};
+        ASSERT_TRUE(!ParseHostDiagLine("[Host] Connected: Product=0x12A8", normal_ev),
+                    "Normal host log line must NOT parse as [JCAST-DIAG|...]");
+    }
+
+    // 3. Verify ClassifyUsbOrTransportError accurately maps libusb / transport errors
+    ASSERT_TRUE(
+        ClassifyUsbOrTransportError("Failed to load libusb-1.0.dll (missing file)") ==
+            DiagCode::E101_MissingCoreFiles,
+        "Missing libusb-1.0.dll should classify as E101");
+    ASSERT_TRUE(
+        ClassifyUsbOrTransportError("libusb_open failed (code -3: LIBUSB_ERROR_ACCESS)") ==
+            DiagCode::E203_UsbOpenAccessDenied,
+        "libusb_open (-3) should classify as E203");
+    ASSERT_TRUE(
+        ClassifyUsbOrTransportError("Failed to claim QuickTime USB interface (code -6: LIBUSB_ERROR_BUSY)") ==
+            DiagCode::E204_UsbInterfaceBusy,
+        "claim_interface (-6) should classify as E204");
+    ASSERT_TRUE(
+        ClassifyUsbOrTransportError("libusb_set_configuration(5) failed (-5)") ==
+            DiagCode::E302_SetConfigFailed,
+        "set_configuration failure should classify as E302");
+    ASSERT_TRUE(
+        ClassifyUsbOrTransportError("Device did not expose QuickTime SubClass 0x2A after re-enumeration") ==
+            DiagCode::E301_IosNotTrustedOrLocked,
+        "Missing SubClass 0x2A should classify as E301");
+    ASSERT_TRUE(
+        ClassifyUsbOrTransportError("USB Bulk IN transfer failed (-1: LIBUSB_ERROR_IO)") ==
+            DiagCode::E304_UsbTransferIoDrop,
+        "Bulk IN (-1) drop should classify as E304");
+
+    // 4. Verify Windows NTSTATUS / Win32 exit code translation
+    ASSERT_TRUE(DescribeProcessExitCode(0xC0000135U).find("STATUS_DLL_NOT_FOUND") != std::string::npos,
+                "0xC0000135 must decode to STATUS_DLL_NOT_FOUND");
+    ASSERT_TRUE(DescribeProcessExitCode(0xC0000005U).find("STATUS_ACCESS_VIOLATION") != std::string::npos,
+                "0xC0000005 must decode to STATUS_ACCESS_VIOLATION");
+
+    // 5. Verify privacy-safe redaction scrubs Windows user folder names & modern/classic Apple UDIDs
+    std::string sensitive =
+        "Path: C:\\Users\\JoeyChen\\Pictures\\JCast Screenshots\\shot.png\n"
+        "PublicPath: C:\\Users\\Public\\Documents\\ok.txt\n"
+        "[Host] Connected: Product=0x12A8 Serial=00008130-001A2B3C4D5E6F70 LinkSpeed=USB 3.0\n"
+        "RawUDID1: 00008120-0099AABBCCDDEEFF and LegacyUDID: 41f2a9c088b1234567890abcdef1234567890abc\n";
+    std::string redacted = RedactSensitiveReportText(sensitive);
+    ASSERT_TRUE(redacted.find("JoeyChen") == std::string::npos &&
+                    redacted.find("C:\\Users\\<USER>\\Pictures") != std::string::npos,
+                "Windows user profile directory must be redacted to <USER>");
+    ASSERT_TRUE(redacted.find("C:\\Users\\Public\\Documents") != std::string::npos,
+                "C:\\Users\\Public must not be redacted");
+    ASSERT_TRUE(redacted.find("001A2B3C4D5E6F70") == std::string::npos &&
+                    redacted.find("Serial=0000****-REDACTED") != std::string::npos,
+                "Serial= Apple UDID must be redacted");
+    ASSERT_TRUE(redacted.find("0099AABBCCDDEEFF") == std::string::npos &&
+                    redacted.find("41f2a9c088b1234567890abcdef1234567890abc") == std::string::npos &&
+                    redacted.find("41f2****-REDACTED") != std::string::npos,
+                "Standalone 25-char and 40-char Apple UDIDs must be redacted");
+
+    // 6. Verify GitHub New Issue URL builder produces safe HTTPS GitHub URL with encoded summary
+    std::string gh_url = BuildGitHubNewIssueUrl(
+        "joey971018yt",
+        "iOS-usb-cam",
+        "1.8.0",
+        DiagCode::E301_IosNotTrustedOrLocked,
+        "User C:\\Users\\Alice\\Desktop Serial=00008130-0011223344556677");
+    ASSERT_TRUE(
+        gh_url.rfind("https://github.com/joey971018yt/iOS-usb-cam/issues/new?title=", 0) == 0,
+        "BuildGitHubNewIssueUrl prefix mismatch");
+    ASSERT_TRUE(gh_url.find("JCAST-E301") != std::string::npos &&
+                    gh_url.find("Alice") == std::string::npos &&
+                    gh_url.find("0011223344556677") == std::string::npos,
+                "BuildGitHubNewIssueUrl must include error code and redact sensitive summary fields");
+
+    return true;
+}
+
 }  // namespace
 
 int main() {
-    std::cout << "[JCast for iOS] Running protocol, USB speed, updater, preview, screenshot & health telemetry tests...\n";
+    std::cout << "[JCast for iOS] Running protocol, USB speed, updater, preview, screenshot, telemetry & diagnostics tests...\n";
     if (!TestExactQuickTimeHexVectors()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestExactQuickTimeHexVectors\n";
     if (!TestSpsResolutionAndAvccConversion()) return EXIT_FAILURE;
@@ -617,6 +740,8 @@ int main() {
     std::cout << "  [PASS] TestPreviewDownscaleAndFullResScreenshotPipeline\n";
     if (!TestStreamHealthTelemetryAndGrading()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestStreamHealthTelemetryAndGrading\n";
+    if (!TestFaultDiagnosticsAndRedaction()) return EXIT_FAILURE;
+    std::cout << "  [PASS] TestFaultDiagnosticsAndRedaction\n";
     std::cout << "[JCast for iOS] All tests passed successfully!\n";
     return EXIT_SUCCESS;
 }

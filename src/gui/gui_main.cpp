@@ -1,5 +1,6 @@
 #include "ios_vcam/app_resource.h"
 #include "ios_vcam/app_updater.h"
+#include "ios_vcam/diagnostics.h"
 #include "ios_vcam/dshow_guids.h"
 #include "ios_vcam/image_convert.h"
 #include "ios_vcam/screenshot_util.h"
@@ -22,6 +23,7 @@
 #include <cwchar>
 #include <cwctype>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -48,11 +50,13 @@ constexpr int kIdComboStatusBar = 1011;
 constexpr int kIdComboAudioOut = 1012;
 constexpr int kIdChkHwDecode = 1013;
 constexpr int kIdChkInlinePreview = 1014;
+constexpr int kIdBtnDiagnostics = 1015;
 constexpr int kIdEditLog = 1020;
 
 constexpr UINT kWmAppendLog = WM_APP + 1;
 constexpr UINT kWmHostExited = WM_APP + 2;
 constexpr UINT kWmUpdateCheckDone = WM_APP + 3;
+constexpr UINT kWmHostDiagEvent = WM_APP + 4;
 constexpr UINT_PTR kTimerRefreshId = 1;
 constexpr UINT_PTR kTimerStartupUpdateId = 2;
 constexpr UINT_PTR kTimerPreviewId = 3;
@@ -75,8 +79,21 @@ struct SystemHealth {
     DshowRegState dshow = DshowRegState::NotRegistered;
     bool libusb_service_ok = false;
     bool libusb_dll_present = false;
+    bool apple_service_installed = false;
+    bool apple_service_running = false;
+    bool mf_h264_ok = true;
     IosUsbState ios_usb = IosUsbState::Unplugged;
     std::wstring ios_service_name;
+    std::vector<std::wstring> missing_core_files;
+    std::wstring os_version_desc;
+    std::wstring hw_summary_desc;
+};
+
+struct DiagEventRecord {
+    DiagCode code = DiagCode::None;
+    DiagSeverity severity = DiagSeverity::Error;
+    std::wstring timestamp_str;
+    std::wstring detail_wide;
 };
 
 struct ResOptionSpec {
@@ -112,6 +129,46 @@ std::wstring Utf8ToWide(const std::string& s) {
     std::wstring out(static_cast<size_t>(n), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), out.data(), n);
     return out;
+}
+
+std::string WideToUtf8Str(std::wstring_view ws) {
+    if (ws.empty()) return {};
+    int n = WideCharToMultiByte(
+        CP_UTF8, 0, ws.data(), static_cast<int>(ws.size()), nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string out(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(
+        CP_UTF8, 0, ws.data(), static_cast<int>(ws.size()), out.data(), n, nullptr, nullptr);
+    return out;
+}
+
+std::wstring CurrentLocalTimeShortWide() {
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
+    wchar_t buf[32] = {0};
+    std::swprintf(buf, 32, L"%02u:%02u:%02u", st.wHour, st.wMinute, st.wSecond);
+    return buf;
+}
+
+bool CopyWideTextToClipboard(HWND owner, const std::wstring& text) {
+    if (!OpenClipboard(owner)) return false;
+    EmptyClipboard();
+    size_t cb = (text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, cb);
+    bool ok = false;
+    if (hMem) {
+        void* ptr = GlobalLock(hMem);
+        if (ptr) {
+            std::memcpy(ptr, text.c_str(), cb);
+            GlobalUnlock(hMem);
+            ok = (SetClipboardData(CF_UNICODETEXT, hMem) != nullptr);
+        }
+        if (!ok) {
+            GlobalFree(hMem);
+        }
+    }
+    CloseClipboard();
+    return ok;
 }
 
 std::wstring ToLowerWide(std::wstring s) {
@@ -165,6 +222,71 @@ SystemHealth ProbeSystemHealth(const std::filesystem::path& base_dir) {
     std::error_code ec;
     h.libusb_dll_present = std::filesystem::exists(base_dir / L"libusb-1.0.dll", ec);
 
+    const wchar_t* kRequiredFiles[] = {
+        L"ios_vcam_host.exe",
+        L"ios_vcam_driver_setup.exe",
+        L"ios_vcam_dshow.dll",
+        L"libusb-1.0.dll",
+        L"drivers\\libusb0.sys",
+    };
+    for (const wchar_t* req : kRequiredFiles) {
+        if (!std::filesystem::exists(base_dir / req, ec)) {
+            h.missing_core_files.emplace_back(req);
+        }
+    }
+
+    wchar_t sys_dir[MAX_PATH] = {0};
+    if (GetSystemDirectoryW(sys_dir, MAX_PATH) > 0) {
+        std::filesystem::path sp(sys_dir);
+        h.mf_h264_ok = std::filesystem::exists(sp / L"mfplat.dll", ec) &&
+                       std::filesystem::exists(sp / L"msmpeg2vdec.dll", ec);
+    }
+
+    {
+        struct RtlOsVersionInfoExW {
+            ULONG dwOSVersionInfoSize;
+            ULONG dwMajorVersion;
+            ULONG dwMinorVersion;
+            ULONG dwBuildNumber;
+            ULONG dwPlatformId;
+            WCHAR szCSDVersion[128];
+        };
+        using RtlGetVersionFn = LONG(WINAPI*)(RtlOsVersionInfoExW*);
+        HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        if (ntdll) {
+            auto fn = reinterpret_cast<RtlGetVersionFn>(GetProcAddress(ntdll, "RtlGetVersion"));
+            RtlOsVersionInfoExW ver{};
+            ver.dwOSVersionInfoSize = sizeof(ver);
+            if (fn && fn(&ver) == 0) {
+                const wchar_t* win_name = (ver.dwBuildNumber >= 22000) ? L"Windows 11" : L"Windows 10";
+                wchar_t obuf[96] = {0};
+                std::swprintf(
+                    obuf,
+                    96,
+                    L"%ls (%lu.%lu Build %lu x64)",
+                    win_name,
+                    ver.dwMajorVersion,
+                    ver.dwMinorVersion,
+                    ver.dwBuildNumber);
+                h.os_version_desc = obuf;
+            }
+        }
+        SYSTEM_INFO si{};
+        GetNativeSystemInfo(&si);
+        MEMORYSTATUSEX ms{};
+        ms.dwLength = sizeof(ms);
+        GlobalMemoryStatusEx(&ms);
+        wchar_t hwbuf[96] = {0};
+        std::swprintf(
+            hwbuf,
+            96,
+            L"%lu 邏輯核心 ｜ 記憶體 %.1f / %.1f GB 可用",
+            si.dwNumberOfProcessors,
+            static_cast<double>(ms.ullAvailPhys) / (1024.0 * 1024.0 * 1024.0),
+            static_cast<double>(ms.ullTotalPhys) / (1024.0 * 1024.0 * 1024.0));
+        h.hw_summary_desc = hwbuf;
+    }
+
     const wchar_t* kRegPath = L"CLSID\\{8E74A2B1-5C19-4D83-9A41-2F6C8D90E101}\\InprocServer32";
     HKEY hKey = nullptr;
     if (RegOpenKeyExW(HKEY_CLASSES_ROOT, kRegPath, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
@@ -190,6 +312,24 @@ SystemHealth ProbeSystemHealth(const std::filesystem::path& base_dir) {
         if (svc) {
             h.libusb_service_ok = true;
             CloseServiceHandle(svc);
+        }
+
+        const wchar_t* kAppleServices[] = {
+            L"Apple Mobile Device Service",
+            L"usbaapl64",
+            L"AppleKmdfFilter",
+            L"AppleLowerFilter",
+        };
+        for (const wchar_t* asvc_name : kAppleServices) {
+            SC_HANDLE asvc = OpenServiceW(scm, asvc_name, SERVICE_QUERY_STATUS);
+            if (asvc) {
+                h.apple_service_installed = true;
+                SERVICE_STATUS ss{};
+                if (QueryServiceStatus(asvc, &ss) && ss.dwCurrentState == SERVICE_RUNNING) {
+                    h.apple_service_running = true;
+                }
+                CloseServiceHandle(asvc);
+            }
         }
         CloseServiceHandle(scm);
     }
@@ -222,6 +362,9 @@ SystemHealth ProbeSystemHealth(const std::filesystem::path& base_dir) {
                 reinterpret_cast<BYTE*>(svc_buf), sizeof(svc_buf) - sizeof(wchar_t), nullptr);
             h.ios_service_name = svc_buf;
             std::wstring low_svc = ToLowerWide(h.ios_service_name);
+            if (!low_svc.empty()) {
+                h.apple_service_installed = true;
+            }
 
             if (low_svc == L"winusb" || low_svc == L"libusbk" || low_svc == L"libusb0") {
                 h.ios_usb = IosUsbState::PluggedZadigConflict;
@@ -753,6 +896,567 @@ private:
     bool modal_done_ = false;
     bool update_launched_ = false;
     std::thread dl_thread_;
+};
+
+class DiagnosticsModalWindow {
+public:
+    DiagnosticsModalWindow(
+        HINSTANCE hinst,
+        HWND parent,
+        std::filesystem::path app_dir,
+        UINT dpi,
+        HFONT font_normal,
+        HFONT font_bold,
+        HFONT font_title,
+        HFONT font_mono,
+        HICON icon_small,
+        UsbLinkSpeed usb_speed,
+        const StreamHealthSnapshot& telem,
+        std::vector<DiagEventRecord> faults,
+        std::wstring raw_log_text,
+        std::function<SystemHealth()> query_health,
+        std::function<bool()> on_repair_driver,
+        std::function<void()> on_clear_faults)
+        : hinst_(hinst),
+          parent_(parent),
+          app_dir_(std::move(app_dir)),
+          dpi_(dpi),
+          font_normal_(font_normal),
+          font_bold_(font_bold),
+          font_title_(font_title),
+          font_mono_(font_mono),
+          icon_small_(icon_small),
+          usb_speed_(usb_speed),
+          telem_(telem),
+          faults_(std::move(faults)),
+          raw_log_text_(std::move(raw_log_text)),
+          query_health_(std::move(query_health)),
+          on_repair_driver_(std::move(on_repair_driver)),
+          on_clear_faults_(std::move(on_clear_faults)) {}
+
+    void RunModal() {
+        const wchar_t* kClassName = L"JCastDiagnosticsModalWndClass";
+        static bool registered = false;
+        if (!registered) {
+            WNDCLASSEXW wc{};
+            wc.cbSize = sizeof(wc);
+            wc.style = CS_HREDRAW | CS_VREDRAW;
+            wc.lpfnWndProc = &DiagnosticsModalWindow::StaticWndProc;
+            wc.hInstance = hinst_;
+            wc.hIcon = icon_small_ ? icon_small_ : LoadIconW(nullptr, IDI_APPLICATION);
+            wc.hIconSm = wc.hIcon;
+            wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+            wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+            wc.lpszClassName = kClassName;
+            RegisterClassExW(&wc);
+            registered = true;
+        }
+
+        int win_w = MulDiv(780, static_cast<int>(dpi_), 96);
+        int win_h = MulDiv(580, static_cast<int>(dpi_), 96);
+
+        RECT prc{};
+        GetWindowRect(parent_, &prc);
+        int pos_x = prc.left + ((prc.right - prc.left) - win_w) / 2;
+        int pos_y = prc.top + ((prc.bottom - prc.top) - win_h) / 2;
+
+        EnableWindow(parent_, FALSE);
+
+        hwnd_ = CreateWindowExW(
+            WS_EX_DLGMODALFRAME,
+            kClassName,
+            L"JCast for iOS — 🩺 智慧故障偵測與一鍵診斷報錯中心",
+            WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+            pos_x,
+            pos_y,
+            win_w,
+            win_h,
+            parent_,
+            nullptr,
+            hinst_,
+            this);
+
+        if (!hwnd_) {
+            EnableWindow(parent_, TRUE);
+            return;
+        }
+
+        MSG msg{};
+        while (!modal_done_ && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            if (!IsDialogMessageW(hwnd_, &msg)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+        if (msg.message == WM_QUIT) {
+            PostQuitMessage(static_cast<int>(msg.wParam));
+        }
+
+        EnableWindow(parent_, TRUE);
+        SetForegroundWindow(parent_);
+    }
+
+private:
+    static constexpr int kBtnRepair = 4001;
+    static constexpr int kBtnCopy = 4002;
+    static constexpr int kBtnSaveTxt = 4003;
+    static constexpr int kBtnGitHubIssue = 4004;
+    static constexpr int kBtnClose = 4005;
+
+    int S(int px) const { return MulDiv(px, static_cast<int>(dpi_), 96); }
+
+    void RebuildReportAndRefreshUi() {
+        SystemHealth h = query_health_ ? query_health_() : ProbeSystemHealth(app_dir_);
+        primary_code_ = DiagCode::None;
+        int issue_count = 0;
+
+        // Collect live environment codes if present
+        std::vector<DiagCode> active_codes;
+        auto push_unique_code = [&](DiagCode c) {
+            if (c == DiagCode::None) return;
+            if (std::find(active_codes.begin(), active_codes.end(), c) == active_codes.end()) {
+                active_codes.push_back(c);
+            }
+            if (primary_code_ == DiagCode::None) {
+                primary_code_ = c;
+            }
+        };
+
+        if (!h.missing_core_files.empty()) {
+            push_unique_code(DiagCode::E101_MissingCoreFiles);
+            ++issue_count;
+        }
+        if (!h.mf_h264_ok) {
+            push_unique_code(DiagCode::E103_MissingMediaFoundation);
+            ++issue_count;
+        }
+        if (!h.apple_service_installed) {
+            push_unique_code(DiagCode::E102_MissingAppleService);
+            ++issue_count;
+        }
+        if (h.dshow != DshowRegState::Ready) {
+            push_unique_code(DiagCode::E104_DshowNotRegistered);
+            ++issue_count;
+        }
+        if (h.ios_usb == IosUsbState::PluggedZadigConflict) {
+            push_unique_code(DiagCode::E201_ZadigDriverConflict);
+            ++issue_count;
+        } else if (h.ios_usb == IosUsbState::PluggedNeedFilter) {
+            push_unique_code(DiagCode::E202_UpperFilterMissing);
+            ++issue_count;
+        }
+
+        for (auto it = faults_.rbegin(); it != faults_.rend(); ++it) {
+            push_unique_code(it->code);
+        }
+        issue_count += static_cast<int>(faults_.size());
+
+        if (lbl_headline_) {
+            if (active_codes.empty()) {
+                SetWindowTextW(
+                    lbl_headline_,
+                    L"✅ 8 項系統環境自檢正常｜目前未偵測到錯誤碼（若仍遇異常可直接複製報告或前往 GitHub 回報）");
+            } else {
+                const auto& pspec = LookupDiagSpec(primary_code_);
+                std::wstring head = L"⚠️ 共偵測到 " + std::to_wstring(active_codes.size()) +
+                                    L" 項異常或提醒｜主要代碼：" + Utf8ToWide(pspec.code_str) + L"（" +
+                                    Utf8ToWide(pspec.title_utf8) + L"）";
+                SetWindowTextW(lbl_headline_, head.c_str());
+            }
+        }
+
+        // Synthesize full UTF-8 diagnostic report, then redact sensitive user paths & UDIDs
+        std::string rpt;
+        rpt.reserve(8192);
+        rpt += "======================================================================\n";
+        rpt += "  JCast for iOS v" IOS_VCAM_VER_DISPLAY_STR " — 系統環境自檢與故障診斷報錯單\n";
+        rpt += "======================================================================\n\n";
+
+        rpt += "【一、8 項系統環境與硬體全面自檢】\n";
+        rpt += "1. 作業系統環境  : " + (h.os_version_desc.empty() ? "Windows x64" : WideToUtf8Str(h.os_version_desc)) + "\n";
+        rpt += "2. 處理器與記憶體: " + WideToUtf8Str(h.hw_summary_desc) + "\n";
+        if (h.missing_core_files.empty()) {
+            rpt += "3. 核心檔案完整性: [PASS] 5 項核心執行檔、DLL 與簽章驅動皆完整\n";
+        } else {
+            rpt += "3. 核心檔案完整性: [FAIL] 缺少檔案: ";
+            for (size_t i = 0; i < h.missing_core_files.size(); ++i) {
+                if (i > 0) rpt += ", ";
+                rpt += WideToUtf8Str(h.missing_core_files[i]);
+            }
+            rpt += " (JCAST-E101)\n";
+        }
+        rpt += std::string("4. 系統 H.264 元件: ") +
+               (h.mf_h264_ok ? "[PASS] Windows Media Foundation (mfplat / msmpeg2vdec) 正常\n"
+                             : "[FAIL] 缺少 Media Feature Pack H.264 解碼元件 (JCAST-E103)\n");
+        if (h.apple_service_running) {
+            rpt += "5. Apple 配對服務: [PASS] Apple 行動裝置服務與驅動運作中\n";
+        } else if (h.apple_service_installed) {
+            rpt += "5. Apple 配對服務: [PASS] 已偵測到 Apple USB 驅動元件\n";
+        } else {
+            rpt += "5. Apple 配對服務: [WARN] 未偵測到 Apple 裝置 / iTunes 服務 (JCAST-E102)\n";
+        }
+        rpt += std::string("6. WHQL 過濾服務 : ") +
+               (h.libusb_service_ok ? "[PASS] libusb0 核心服務已安裝就緒\n"
+                                    : "[WARN] libusb0 尚未安裝（點「一鍵修復驅動」自動完成）\n");
+        if (h.dshow == DshowRegState::Ready) {
+            rpt += "7. DirectShow 鏡頭: [PASS] JCast for iOS (Video/Audio) 註冊正常\n";
+        } else if (h.dshow == DshowRegState::PathMismatch) {
+            rpt += "7. DirectShow 鏡頭: [WARN] 資料夾路徑已變更，需重新註冊 (JCAST-E104)\n";
+        } else {
+            rpt += "7. DirectShow 鏡頭: [WARN] 尚未註冊虛擬擷取卡 (JCAST-E104)\n";
+        }
+
+        switch (h.ios_usb) {
+            case IosUsbState::PluggedReady:
+                rpt += "8. iOS USB 裝置  : [PASS] 已連線且已掛載 UpperFilter=libusb0 (" +
+                       std::string(UsbLinkSpeedName(usb_speed_)) + ")\n";
+                break;
+            case IosUsbState::PluggedNeedFilter:
+                rpt += "8. iOS USB 裝置  : [WARN] 已插入手機但尚未掛載 libusb0 過濾層 (JCAST-E202)\n";
+                break;
+            case IosUsbState::PluggedZadigConflict:
+                rpt += "8. iOS USB 裝置  : [FAIL] 父複合裝置遭 " + WideToUtf8Str(h.ios_service_name) +
+                       " 覆蓋原廠驅動 (JCAST-E201)\n";
+                break;
+            case IosUsbState::Unplugged:
+                rpt += "8. iOS USB 裝置  : [INFO] 目前尚未插入 iPhone / iPad USB\n";
+                break;
+        }
+
+        rpt += "\n【二、偵測到的錯誤碼解析與排除步驟】\n";
+        if (active_codes.empty()) {
+            rpt += "• 目前未偵測到異常錯誤碼。若您在 OBS 看不到畫面，請確認先點擊本程式「智慧一鍵啟動」再開啟 OBS。\n";
+        } else {
+            for (DiagCode dc : active_codes) {
+                const auto& sp = LookupDiagSpec(dc);
+                rpt += "----------------------------------------------------------------------\n";
+                rpt += std::string("▶ [") + sp.code_str + "] " + sp.title_utf8 + "\n";
+                rpt += std::string("  • 可能原因：") + sp.cause_utf8 + "\n";
+                rpt += "  • 排除步驟：\n";
+                std::string steps = sp.fix_steps_utf8;
+                size_t pos = 0;
+                while (pos < steps.size()) {
+                    size_t nl = steps.find('\n', pos);
+                    std::string one = (nl == std::string::npos) ? steps.substr(pos) : steps.substr(pos, nl - pos);
+                    rpt += "      " + one + "\n";
+                    if (nl == std::string::npos) break;
+                    pos = nl + 1;
+                }
+            }
+            rpt += "----------------------------------------------------------------------\n";
+        }
+
+        if (!faults_.empty()) {
+            rpt += "\n【三、近期捕捉到的執行期異常事件紀錄】\n";
+            for (const auto& ev : faults_) {
+                const auto& sp = LookupDiagSpec(ev.code);
+                rpt += "• [" + WideToUtf8Str(ev.timestamp_str) + "] " + sp.code_str + " — " +
+                       WideToUtf8Str(ev.detail_wide) + "\n";
+            }
+        }
+
+        rpt += "\n【四、即時串流健康度快照】\n";
+        if (telem_.active && !telem_.waiting_first_frame) {
+            char tbuf[256] = {0};
+            std::snprintf(
+                tbuf,
+                sizeof(tbuf),
+                "• 狀態: 串流中 (%ux%u) | FPS: %.1f | 碼率: %.1f Mbps (峰值 %.1fM) | 管線延遲: %.1f ms (純解碼 %.1f ms) | 加速: %s | 掉幀: %u\n",
+                telem_.frame_width,
+                telem_.frame_height,
+                telem_.fps,
+                telem_.bitrate_mbps,
+                telem_.peak_bitrate_mbps,
+                telem_.pipeline_latency_ms,
+                telem_.decode_latency_ms,
+                telem_.hw_accelerated ? "D3D11VA GPU" : "CPU SW",
+                telem_.dropped_frames);
+            rpt += tbuf;
+        } else if (telem_.waiting_first_frame) {
+            rpt += "• 狀態: 背景擷取程序已啟動，等待手機傳送首張影格中\n";
+        } else {
+            rpt += "• 狀態: 待機中（未啟動串流）\n";
+        }
+
+        rpt += "\n【五、近期執行日誌摘要（已自動隱私脫敏：隱藏本機帳號與裝置序號）】\n";
+        std::string raw_log_u8 = WideToUtf8Str(raw_log_text_);
+        if (raw_log_u8.size() > 5500) {
+            size_t cut = raw_log_u8.find('\n', raw_log_u8.size() - 5500);
+            raw_log_u8 = "...(前略)...\n" +
+                         ((cut != std::string::npos) ? raw_log_u8.substr(cut + 1)
+                                                     : raw_log_u8.substr(raw_log_u8.size() - 5500));
+        }
+        rpt += raw_log_u8;
+        if (!rpt.empty() && rpt.back() != '\n') rpt.push_back('\n');
+
+        redacted_report_utf8_ = RedactSensitiveReportText(rpt);
+        redacted_report_wide_ = NormalizeLineEndingsCrlf(redacted_report_utf8_);
+
+        if (edit_report_) {
+            SetWindowTextW(edit_report_, redacted_report_wide_.c_str());
+        }
+    }
+
+    void BuildDialogControls() {
+        RECT rc{};
+        GetClientRect(hwnd_, &rc);
+        int cw = rc.right - rc.left;
+        int ch = rc.bottom - rc.top;
+        int pad = S(16);
+        int inner_w = cw - pad * 2;
+
+        lbl_headline_ = CreateWindowExW(
+            0,
+            L"STATIC",
+            L"正在執行 8 項系統環境與驅動深度自檢...",
+            WS_CHILD | WS_VISIBLE | SS_LEFT,
+            pad,
+            S(12),
+            inner_w,
+            S(26),
+            hwnd_,
+            nullptr,
+            hinst_,
+            nullptr);
+        SendMessageW(lbl_headline_, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
+
+        HWND lbl_sub = CreateWindowExW(
+            0,
+            L"STATIC",
+            L"🔒 隱私保護：下方診斷報告已自動隱藏您的電腦使用者帳號與手機序號，可安心複製或匯出回報。",
+            WS_CHILD | WS_VISIBLE | SS_LEFT,
+            pad,
+            S(38),
+            inner_w,
+            S(20),
+            hwnd_,
+            nullptr,
+            hinst_,
+            nullptr);
+        SendMessageW(lbl_sub, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+
+        int edit_top = S(64);
+        int btn_h = S(34);
+        int btn_y = ch - pad - btn_h;
+        int status_y = btn_y - S(26);
+        int edit_h = std::max(S(140), status_y - S(6) - edit_top);
+
+        edit_report_ = CreateWindowExW(
+            WS_EX_CLIENTEDGE,
+            L"EDIT",
+            L"",
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
+            pad,
+            edit_top,
+            inner_w,
+            edit_h,
+            hwnd_,
+            nullptr,
+            hinst_,
+            nullptr);
+        SendMessageW(edit_report_, WM_SETFONT, reinterpret_cast<WPARAM>(font_mono_), TRUE);
+        SendMessageW(edit_report_, EM_SETLIMITTEXT, 256 * 1024, 0);
+
+        lbl_feedback_ = CreateWindowExW(
+            0,
+            L"STATIC",
+            L"提示：遇到問題時可先點「🔧 一鍵修復驅動」，或點「🐞 開啟 GitHub 回報問題」一鍵提交報錯單。",
+            WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
+            pad,
+            status_y,
+            inner_w,
+            S(22),
+            hwnd_,
+            nullptr,
+            hinst_,
+            nullptr);
+        SendMessageW(lbl_feedback_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+
+        int gap = S(8);
+        int avail = inner_w - gap * 4;
+        int w_rep = avail * 21 / 100;
+        int w_cpy = avail * 21 / 100;
+        int w_sav = avail * 20 / 100;
+        int w_gh  = avail * 25 / 100;
+        int w_cls = avail - w_rep - w_cpy - w_sav - w_gh;
+        int x = pad;
+
+        HWND b1 = CreateWindowExW(
+            0, L"BUTTON", L"🔧 一鍵修復驅動", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            x, btn_y, w_rep, btn_h, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kBtnRepair)), hinst_, nullptr);
+        SendMessageW(b1, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+        x += w_rep + gap;
+
+        HWND b2 = CreateWindowExW(
+            0, L"BUTTON", L"📋 複製脫敏報告", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            x, btn_y, w_cpy, btn_h, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kBtnCopy)), hinst_, nullptr);
+        SendMessageW(b2, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+        x += w_cpy + gap;
+
+        HWND b3 = CreateWindowExW(
+            0, L"BUTTON", L"💾 匯出報錯檔 (.txt)", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            x, btn_y, w_sav, btn_h, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kBtnSaveTxt)), hinst_, nullptr);
+        SendMessageW(b3, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+        x += w_sav + gap;
+
+        HWND b4 = CreateWindowExW(
+            0, L"BUTTON", L"🐞 開啟 GitHub 回報問題", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+            x, btn_y, w_gh, btn_h, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kBtnGitHubIssue)), hinst_, nullptr);
+        SendMessageW(b4, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
+        x += w_gh + gap;
+
+        HWND b5 = CreateWindowExW(
+            0, L"BUTTON", L"關閉", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            x, btn_y, w_cls, btn_h, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kBtnClose)), hinst_, nullptr);
+        SendMessageW(b5, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+
+        RebuildReportAndRefreshUi();
+    }
+
+    void ExportReportToTxt() {
+        std::filesystem::path diag_dir = GetDefaultScreenshotDirectory(app_dir_) / L"Diagnostics";
+        std::error_code ec;
+        std::filesystem::create_directories(diag_dir, ec);
+
+        SYSTEMTIME st{};
+        GetLocalTime(&st);
+        wchar_t fname[96] = {0};
+        std::swprintf(
+            fname,
+            96,
+            L"JCast_DiagReport_%04u%02u%02u_%02u%02u%02u.txt",
+            st.wYear,
+            st.wMonth,
+            st.wDay,
+            st.wHour,
+            st.wMinute,
+            st.wSecond);
+        std::filesystem::path out_path = diag_dir / fname;
+
+        std::ofstream ofs(out_path, std::ios::binary);
+        if (!ofs) {
+            SetWindowTextW(lbl_feedback_, L"❌ 無法寫入診斷檔案，請改用「📋 複製脫敏報告」。");
+            return;
+        }
+        const char kBom[3] = {'\xEF', '\xBB', '\xBF'};
+        ofs.write(kBom, 3);
+        ofs.write(redacted_report_utf8_.data(), static_cast<std::streamsize>(redacted_report_utf8_.size()));
+        ofs.close();
+
+        std::wstring msg = L"✅ 已儲存診斷報錯檔：" + out_path.wstring();
+        SetWindowTextW(lbl_feedback_, msg.c_str());
+        ShellExecuteW(hwnd_, L"open", diag_dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+
+    static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+        DiagnosticsModalWindow* self = nullptr;
+        if (msg == WM_NCCREATE) {
+            auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            self = static_cast<DiagnosticsModalWindow*>(cs->lpCreateParams);
+            self->hwnd_ = hwnd;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        } else {
+            self = reinterpret_cast<DiagnosticsModalWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        }
+        return self ? self->WndProc(msg, wParam, lParam) : DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
+    LRESULT WndProc(UINT msg, WPARAM wParam, LPARAM lParam) {
+        switch (msg) {
+            case WM_CREATE:
+                BuildDialogControls();
+                return 0;
+
+            case WM_CTLCOLORSTATIC: {
+                HDC hdc = reinterpret_cast<HDC>(wParam);
+                HWND ctrl = reinterpret_cast<HWND>(lParam);
+                if (ctrl != edit_report_) {
+                    SetBkMode(hdc, TRANSPARENT);
+                    return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_BTNFACE));
+                }
+                break;
+            }
+
+            case WM_COMMAND: {
+                int id = LOWORD(wParam);
+                if (HIWORD(wParam) == BN_CLICKED) {
+                    if (id == kBtnRepair) {
+                        if (on_repair_driver_ && on_repair_driver_()) {
+                            if (on_clear_faults_) on_clear_faults_();
+                            faults_.clear();
+                            RebuildReportAndRefreshUi();
+                            SetWindowTextW(lbl_feedback_, L"✅ 已完成驅動與虛擬擷取卡修復，並重新整理自檢結果！");
+                        }
+                        return 0;
+                    }
+                    if (id == kBtnCopy) {
+                        if (CopyWideTextToClipboard(hwnd_, redacted_report_wide_)) {
+                            SetWindowTextW(lbl_feedback_, L"✅ 已將完整脫敏診斷報告複製到剪貼簿，可直接 Ctrl+V 貼上！");
+                        }
+                        return 0;
+                    }
+                    if (id == kBtnSaveTxt) {
+                        ExportReportToTxt();
+                        return 0;
+                    }
+                    if (id == kBtnGitHubIssue) {
+                        CopyWideTextToClipboard(hwnd_, redacted_report_wide_);
+                        std::string issue_url = BuildGitHubNewIssueUrl(
+                            IOS_VCAM_GITHUB_OWNER,
+                            IOS_VCAM_GITHUB_REPO,
+                            IOS_VCAM_VER_DISPLAY_STR,
+                            primary_code_,
+                            faults_.empty() ? "" : WideToUtf8Str(faults_.back().detail_wide));
+                        OpenSafeGitHubWebUrl(hwnd_, issue_url);
+                        SetWindowTextW(
+                            lbl_feedback_,
+                            L"✅ 已複製診斷報告並開啟 GitHub Issue 頁面，請於網頁內文區塊按 Ctrl+V 貼上提交！");
+                        return 0;
+                    }
+                    if (id == kBtnClose || id == IDCANCEL) {
+                        PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+                        return 0;
+                    }
+                }
+                break;
+            }
+
+            case WM_CLOSE:
+                modal_done_ = true;
+                DestroyWindow(hwnd_);
+                hwnd_ = nullptr;
+                return 0;
+        }
+        return DefWindowProcW(hwnd_, msg, wParam, lParam);
+    }
+
+    HINSTANCE hinst_ = nullptr;
+    HWND parent_ = nullptr;
+    HWND hwnd_ = nullptr;
+    std::filesystem::path app_dir_;
+    UINT dpi_ = 96;
+    HFONT font_normal_ = nullptr;
+    HFONT font_bold_ = nullptr;
+    HFONT font_title_ = nullptr;
+    HFONT font_mono_ = nullptr;
+    HICON icon_small_ = nullptr;
+
+    UsbLinkSpeed usb_speed_ = UsbLinkSpeed::Unknown;
+    StreamHealthSnapshot telem_{};
+    std::vector<DiagEventRecord> faults_;
+    std::wstring raw_log_text_;
+    std::function<SystemHealth()> query_health_;
+    std::function<bool()> on_repair_driver_;
+    std::function<void()> on_clear_faults_;
+
+    DiagCode primary_code_ = DiagCode::None;
+    std::string redacted_report_utf8_;
+    std::wstring redacted_report_wide_;
+
+    HWND lbl_headline_ = nullptr;
+    HWND edit_report_ = nullptr;
+    HWND lbl_feedback_ = nullptr;
+    bool modal_done_ = false;
 };
 
 std::wstring FormatBytesCompactWide(uint64_t bytes) {
@@ -1521,7 +2225,7 @@ public:
         hwnd_ = CreateWindowExW(
             0,
             wc.lpszClassName,
-            L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — 智慧擷取控制台 (健康度儀表板 × 即時預覽 × 原畫質截圖)",
+            L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — 智慧擷取控制台 (故障偵測報錯 × 健康度儀表板 × 即時預覽)",
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
             pos_x, pos_y, win_w, win_h,
             nullptr, nullptr, hInst, this);
@@ -1695,13 +2399,14 @@ private:
         SendMessageW(btn_smart_start_, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
 
         int sub_btn_y = main_btn_y + Scale(46, dpi);
-        int gap = Scale(8, dpi);
-        int avail_btn_w = inner_w - gap * 4;
-        int w_mock = avail_btn_w * 23 / 100;
-        int w_rep = avail_btn_w * 21 / 100;
-        int w_obs = avail_btn_w * 17 / 100;
-        int w_upd = avail_btn_w * 22 / 100;
-        int w_uninst = avail_btn_w - w_mock - w_rep - w_obs - w_upd;
+        int gap = Scale(7, dpi);
+        int avail_btn_w = inner_w - gap * 5;
+        int w_mock = avail_btn_w * 18 / 100;
+        int w_rep = avail_btn_w * 19 / 100;
+        int w_diag = avail_btn_w * 19 / 100;
+        int w_obs = avail_btn_w * 14 / 100;
+        int w_upd = avail_btn_w * 17 / 100;
+        int w_uninst = avail_btn_w - w_mock - w_rep - w_diag - w_obs - w_upd;
 
         int cur_x = margin + btn_pad;
         btn_mock_ = CreateWindowExW(
@@ -1719,6 +2424,14 @@ private:
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnRepairDriver)), hinst_, nullptr);
         SendMessageW(btn_repair_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
         cur_x += w_rep + gap;
+
+        btn_diagnostics_ = CreateWindowExW(
+            0, L"BUTTON", L"🩺 診斷報錯",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            cur_x, sub_btn_y, w_diag, Scale(34, dpi),
+            hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnDiagnostics)), hinst_, nullptr);
+        SendMessageW(btn_diagnostics_, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
+        cur_x += w_diag + gap;
 
         btn_obs_guide_ = CreateWindowExW(
             0, L"BUTTON", L"📋 OBS 教學",
@@ -1830,7 +2543,7 @@ private:
 
         AppendLogLine(
             L"[歡迎] 歡迎使用 JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR
-            L"！新增「📊 即時串流健康度儀表板 (FPS / 碼率 Mbps / 解碼延遲 ms)」與全螢幕 HUD！");
+            L"！新增「🩺 智慧故障偵測與一鍵診斷報錯中心（含自動軟解自癒、隱私脫敏與 GitHub 回報）」！");
         RefreshHealthAndUi(true);
         TickTelemetryDashboard(true);
         SetTimer(hwnd_, kTimerRefreshId, 2000, nullptr);
@@ -2275,20 +2988,151 @@ private:
         return true;
     }
 
+    std::wstring GetLogTextWide() const {
+        if (!edit_log_) return {};
+        int len = GetWindowTextLengthW(edit_log_);
+        if (len <= 0) return {};
+        std::wstring buf(static_cast<size_t>(len) + 1, L'\0');
+        int copied = GetWindowTextW(edit_log_, buf.data(), len + 1);
+        if (copied <= 0) return {};
+        buf.resize(static_cast<size_t>(copied));
+        return buf;
+    }
+
+    void UpdateDiagnosticsButtonBadge() {
+        if (btn_diagnostics_) {
+            if (recent_faults_.empty()) {
+                SetWindowTextW(btn_diagnostics_, L"🩺 診斷報錯");
+            } else {
+                std::wstring lbl = L"⚠️ 診斷報錯 (" + std::to_wstring(recent_faults_.size()) + L")";
+                SetWindowTextW(btn_diagnostics_, lbl.c_str());
+            }
+        }
+        if (hwnd_) {
+            InvalidateRect(hwnd_, &telemetry_rect_, FALSE);
+            InvalidateRect(hwnd_, &banner_rect_, FALSE);
+        }
+    }
+
+    void OpenDiagnosticsModal() {
+        if (!hwnd_ || shutting_down_.load(std::memory_order_acquire)) return;
+        UINT dpi = GetSystemDpiSafe(hwnd_);
+        DiagnosticsModalWindow dlg(
+            hinst_,
+            hwnd_,
+            base_dir_,
+            dpi,
+            font_normal_,
+            font_bold_,
+            font_title_,
+            font_mono_,
+            icon_small_,
+            detected_usb_speed_,
+            telem_snap_,
+            recent_faults_,
+            GetLogTextWide(),
+            [this]() {
+                health_ = ProbeSystemHealth(base_dir_);
+                return health_;
+            },
+            [this]() {
+                if (host_running_.load(std::memory_order_acquire)) {
+                    StopHostProcess();
+                }
+                return RunDriverSetupElevated(L"--install");
+            },
+            [this]() {
+                recent_faults_.clear();
+                UpdateDiagnosticsButtonBadge();
+            });
+        dlg.RunModal();
+    }
+
+    void RecordDiagnosticFault(
+        DiagCode code,
+        DiagSeverity sev,
+        const std::wstring& detail,
+        bool auto_open_modal = false) {
+        if (code == DiagCode::None) return;
+
+        bool duplicate_tail = (!recent_faults_.empty() &&
+                               recent_faults_.back().code == code &&
+                               recent_faults_.back().detail_wide == detail);
+        if (duplicate_tail) {
+            recent_faults_.back().timestamp_str = CurrentLocalTimeShortWide();
+            recent_faults_.back().severity = std::max(recent_faults_.back().severity, sev);
+        } else {
+            constexpr size_t kMaxStoredFaults = 25;
+            if (recent_faults_.size() >= kMaxStoredFaults) {
+                recent_faults_.erase(recent_faults_.begin());
+            }
+            recent_faults_.push_back(DiagEventRecord{
+                code,
+                sev,
+                CurrentLocalTimeShortWide(),
+                detail,
+            });
+
+            const auto& spec = LookupDiagSpec(code);
+            AppendLogLine(
+                L"[異常偵測 " + Utf8ToWide(spec.code_str) + L"] " +
+                Utf8ToWide(spec.title_utf8) + L" — " + detail +
+                L"（點「🩺 診斷報錯」檢視排除步驟或一鍵回報）");
+        }
+
+        UpdateDiagnosticsButtonBadge();
+        if (auto_open_modal && !shutting_down_.load(std::memory_order_acquire)) {
+            OpenDiagnosticsModal();
+        }
+    }
+
     void StartHostProcess(bool mock_mode) {
         if (host_running_.load(std::memory_order_acquire)) {
             return;
         }
 
-        std::filesystem::path host_exe = base_dir_ / L"ios_vcam_host.exe";
-        if (!std::filesystem::exists(host_exe)) {
-            AppendLogLine(L"[錯誤] 找不到 ios_vcam_host.exe！");
-            MessageBoxW(hwnd_, L"找不到 ios_vcam_host.exe，請確認完整安裝或解壓縮 JCast for iOS 資料夾！",
-                        L"缺少檔案", MB_ICONERROR | MB_OK);
+        health_ = ProbeSystemHealth(base_dir_);
+        if (!health_.missing_core_files.empty()) {
+            std::wstring missing_list;
+            for (size_t i = 0; i < health_.missing_core_files.size(); ++i) {
+                if (i > 0) missing_list += L"、";
+                missing_list += health_.missing_core_files[i];
+            }
+            RecordDiagnosticFault(
+                DiagCode::E101_MissingCoreFiles,
+                DiagSeverity::Critical,
+                L"程式目錄缺少必要元件：" + missing_list + L"，請重新完整解壓縮或執行安裝程式。",
+                true);
             return;
         }
 
-        health_ = ProbeSystemHealth(base_dir_);
+        if (!mock_mode && !health_.mf_h264_ok) {
+            RecordDiagnosticFault(
+                DiagCode::E103_MissingMediaFoundation,
+                DiagSeverity::Critical,
+                L"系統缺少 mfplat.dll 或 msmpeg2vdec.dll（Windows N / KN 版本請先安裝媒體功能套件）。",
+                true);
+            return;
+        }
+
+        if (!mock_mode && health_.ios_usb == IosUsbState::PluggedZadigConflict) {
+            RecordDiagnosticFault(
+                DiagCode::E201_ZadigDriverConflict,
+                DiagSeverity::Critical,
+                L"偵測到父複合裝置遭 " + health_.ios_service_name + L" 覆蓋原廠驅動，無法啟用 Apple 影音通道。",
+                true);
+            return;
+        }
+
+        if (!mock_mode && !health_.apple_service_installed) {
+            RecordDiagnosticFault(
+                DiagCode::E102_MissingAppleService,
+                DiagSeverity::Warning,
+                L"尚未偵測到 Apple 裝置 / iTunes 配對服務；若手機未跳出「信任這部電腦」請先安裝 Apple 裝置。",
+                false);
+        }
+
+        std::filesystem::path host_exe = base_dir_ / L"ios_vcam_host.exe";
         if (mock_mode) {
             if (health_.dshow != DshowRegState::Ready) {
                 if (!RunDriverSetupElevated(L"--install")) return;
@@ -2368,6 +3212,9 @@ private:
         std::vector<wchar_t> cmd_buf(cmd.begin(), cmd.end());
         cmd_buf.push_back(L'\0');
 
+        user_stopping_host_.store(false, std::memory_order_release);
+        session_critical_fault_seen_ = false;
+
         BOOL ok = CreateProcessW(
             host_exe.c_str(),
             cmd_buf.data(),
@@ -2383,9 +3230,14 @@ private:
         CloseHandle(write_pipe);
 
         if (!ok) {
+            DWORD err = GetLastError();
             CloseHandle(read_pipe);
             CloseHandle(hStopEvt);
-            AppendLogLine(L"[錯誤] 啟動 ios_vcam_host.exe 失敗 (錯誤碼 " + std::to_wstring(GetLastError()) + L")。");
+            RecordDiagnosticFault(
+                DiagCode::E503_HostUnexpectedExit,
+                DiagSeverity::Critical,
+                L"無法啟動背景擷取引擎 ios_vcam_host.exe（Windows 錯誤碼 " + std::to_wstring(err) + L"）。",
+                true);
             return;
         }
 
@@ -2409,6 +3261,19 @@ private:
             log_reader_thread_.join();
         }
         log_reader_thread_ = std::thread([this, read_pipe, hProc = pi.hProcess]() {
+            auto dispatch_line = [this](const std::string& raw_line) {
+                if (raw_line.empty()) return;
+                ParsedDiagEvent pev;
+                if (ParseHostDiagLine(raw_line, pev)) {
+                    auto* heap_ev = new ParsedDiagEvent(std::move(pev));
+                    if (!PostMessageW(hwnd_, kWmHostDiagEvent, 0, reinterpret_cast<LPARAM>(heap_ev))) {
+                        delete heap_ev;
+                    }
+                } else {
+                    PostLogFromWorker(Utf8ToWide(raw_line));
+                }
+            };
+
             char buf[1024];
             std::string pending;
             DWORD bytes_read = 0;
@@ -2419,21 +3284,27 @@ private:
                     std::string line = pending.substr(0, nl);
                     if (!line.empty() && line.back() == '\r') line.pop_back();
                     pending.erase(0, nl + 1);
-                    if (!line.empty()) {
-                        PostLogFromWorker(Utf8ToWide(line));
-                    }
+                    dispatch_line(line);
                 }
             }
             if (!pending.empty()) {
-                PostLogFromWorker(Utf8ToWide(pending));
+                if (pending.back() == '\r') pending.pop_back();
+                dispatch_line(pending);
             }
             CloseHandle(read_pipe);
             WaitForSingleObject(hProc, 3000);
-            PostMessageW(hwnd_, kWmHostExited, 0, 0);
+            DWORD exit_code = 0;
+            if (!GetExitCodeProcess(hProc, &exit_code) || exit_code == STILL_ACTIVE) {
+                exit_code = 0;
+            }
+            bool manual_stop = user_stopping_host_.load(std::memory_order_acquire);
+            PostMessageW(hwnd_, kWmHostExited, static_cast<WPARAM>(exit_code), manual_stop ? 1 : 0);
         });
     }
 
     void StopHostProcess() {
+        user_stopping_host_.store(true, std::memory_order_release);
+
         HANDLE hProc = nullptr;
         HANDLE hEvt = nullptr;
         {
@@ -2451,13 +3322,15 @@ private:
             if (WaitForSingleObject(hProc, 3500) == WAIT_TIMEOUT) {
                 TerminateProcess(hProc, 0);
             }
+        }
+        if (log_reader_thread_.joinable()) {
+            log_reader_thread_.join();
+        }
+        if (hProc) {
             CloseHandle(hProc);
         }
         if (hEvt) {
             CloseHandle(hEvt);
-        }
-        if (log_reader_thread_.joinable()) {
-            log_reader_thread_.join();
         }
         host_running_.store(false, std::memory_order_release);
         running_mock_ = false;
@@ -2916,10 +3789,10 @@ private:
             DrawTextW(mem_dc, lat_sub.c_str(), -1, &sub_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
 
-        // --- Card 3: Overall Stream Health Grade & Resolution/Audio Diagnostics ---
+        // --- Card 3: Overall Stream Health Grade, Fault Alert & Click-to-Diagnose ---
         COLORREF grd_col = RGB(148, 163, 184);
         std::wstring grd_val = L"⚪ 待機未啟動";
-        std::wstring grd_sub = L"啟動投影後即時診斷健康度";
+        std::wstring grd_sub = L"點擊開啟 8 項環境自檢與報錯";
         switch (s.grade) {
             case StreamHealthGrade::Excellent:
                 grd_col = RGB(74, 222, 128);
@@ -2961,13 +3834,33 @@ private:
                 grd_sub = sbuf;
             }
         }
-        draw_card_frame(3, s.active ? grd_col : RGB(51, 65, 85));
+
+        bool highlight_fault_on_card = false;
+        if (!recent_faults_.empty()) {
+            const auto& latest_f = recent_faults_.back();
+            bool stream_runtime_fault =
+                (latest_f.code == DiagCode::E402_GpuFallbackToSoftware ||
+                 latest_f.code == DiagCode::E403_HighDecodeLatency ||
+                 latest_f.code == DiagCode::E501_AudioEndpointLost);
+            if (!streaming || stream_runtime_fault || latest_f.severity >= DiagSeverity::Error) {
+                highlight_fault_on_card = true;
+                const auto& fspec = LookupDiagSpec(latest_f.code);
+                grd_col = (latest_f.severity >= DiagSeverity::Error)
+                              ? RGB(248, 113, 113)
+                              : RGB(251, 191, 36);
+                grd_val = ((latest_f.severity >= DiagSeverity::Error) ? L"❌ 錯誤 " : L"⚠️ 異常 ") +
+                          Utf8ToWide(fspec.code_str);
+                grd_sub = L"點擊開啟診斷中心查看解法";
+            }
+        }
+
+        draw_card_frame(3, (s.active || highlight_fault_on_card) ? grd_col : RGB(51, 65, 85));
         {
             int x0 = card_w * 3, x1 = w;
             SelectObject(mem_dc, font_small_);
             SetTextColor(mem_dc, RGB(148, 163, 184));
             RECT hdr_rc{x0 + pad_x, Scale(6, dpi), x1 - pad_x, Scale(23, dpi)};
-            DrawTextW(mem_dc, L"🩺 串流健康度診斷", -1, &hdr_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            DrawTextW(mem_dc, L"🩺 健康度診斷 (點擊自檢)", -1, &hdr_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
             SelectObject(mem_dc, font_bold_);
             SetTextColor(mem_dc, grd_col);
@@ -2989,6 +3882,16 @@ private:
         SelectObject(mem_dc, old_bmp);
         DeleteObject(mem_bmp);
         DeleteDC(mem_dc);
+    }
+
+    RECT GetTelemetryDiagCardRect() const {
+        int w = telemetry_rect_.right - telemetry_rect_.left;
+        return RECT{
+            telemetry_rect_.left + (w * 3 / 4),
+            telemetry_rect_.top,
+            telemetry_rect_.right,
+            telemetry_rect_.bottom,
+        };
     }
 
     void PaintInlinePreview(HDC hdc) {
@@ -3118,10 +4021,22 @@ private:
             case WM_SETCURSOR: {
                 if (reinterpret_cast<HWND>(wParam) == hwnd_ && LOWORD(lParam) == HTCLIENT) {
                     POINT pt{};
-                    if (GetCursorPos(&pt) && ScreenToClient(hwnd_, &pt) && PtInRect(&preview_rect_, pt)) {
+                    RECT diag_rc = GetTelemetryDiagCardRect();
+                    if (GetCursorPos(&pt) && ScreenToClient(hwnd_, &pt) &&
+                        (PtInRect(&preview_rect_, pt) || PtInRect(&diag_rc, pt))) {
                         SetCursor(LoadCursorW(nullptr, IDC_HAND));
                         return TRUE;
                     }
+                }
+                break;
+            }
+
+            case WM_LBUTTONDOWN: {
+                POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                RECT diag_rc = GetTelemetryDiagCardRect();
+                if (PtInRect(&diag_rc, pt)) {
+                    OpenDiagnosticsModal();
+                    return 0;
                 }
                 break;
             }
@@ -3219,6 +4134,10 @@ private:
                         RunDriverSetupElevated(L"--install");
                         return 0;
                     }
+                    if (id == kIdBtnDiagnostics) {
+                        OpenDiagnosticsModal();
+                        return 0;
+                    }
                     if (id == kIdBtnCopyObsGuide) {
                         ShowAndCopyObsGuide();
                         return 0;
@@ -3259,10 +4178,35 @@ private:
                 return 0;
             }
 
+            case kWmHostDiagEvent: {
+                auto* ev = reinterpret_cast<ParsedDiagEvent*>(lParam);
+                if (ev) {
+                    if (ev->severity == DiagSeverity::Critical) {
+                        session_critical_fault_seen_ = true;
+                    }
+                    RecordDiagnosticFault(ev->code, ev->severity, Utf8ToWide(ev->detail_utf8), false);
+                    delete ev;
+                }
+                return 0;
+            }
+
             case kWmHostExited: {
+                uint32_t exit_code = static_cast<uint32_t>(wParam);
+                bool manual_stop = (lParam != 0);
                 if (host_running_.load(std::memory_order_acquire)) {
                     StopHostProcess();
                     AppendLogLine(L"[狀態] 擷取背景程序已結束。");
+                }
+                if (!manual_stop && !shutting_down_.load(std::memory_order_acquire) && exit_code != 0) {
+                    if (!session_critical_fault_seen_) {
+                        RecordDiagnosticFault(
+                            DiagCode::E503_HostUnexpectedExit,
+                            DiagSeverity::Critical,
+                            Utf8ToWide(DescribeProcessExitCode(exit_code)),
+                            true);
+                    } else {
+                        OpenDiagnosticsModal();
+                    }
                 }
                 return 0;
             }
@@ -3336,6 +4280,7 @@ private:
     HWND btn_smart_start_ = nullptr;
     HWND btn_mock_ = nullptr;
     HWND btn_repair_ = nullptr;
+    HWND btn_diagnostics_ = nullptr;
     HWND btn_obs_guide_ = nullptr;
     HWND btn_update_ = nullptr;
     HWND btn_uninstall_ = nullptr;
@@ -3352,6 +4297,8 @@ private:
     HFONT font_small_ = nullptr;
 
     std::vector<std::wstring> audio_endpoint_matches_;
+    std::vector<DiagEventRecord> recent_faults_;
+    bool session_critical_fault_seen_ = false;
 
     SharedCaptureConsumer telemetry_shm_;
     StreamHealthSnapshot telem_snap_{};
@@ -3377,6 +4324,7 @@ private:
     HANDLE host_process_ = nullptr;
     HANDLE host_stop_event_ = nullptr;
     std::atomic<bool> host_running_{false};
+    std::atomic<bool> user_stopping_host_{false};
     bool running_mock_ = false;
     std::thread log_reader_thread_;
 

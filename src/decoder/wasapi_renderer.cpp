@@ -1,9 +1,11 @@
 #include "ios_vcam/wasapi_renderer.h"
+#include "ios_vcam/diagnostics.h"
 #include "ios_vcam/shared_ipc.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <iostream>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -263,7 +265,16 @@ void WasapiAudioRouter::WorkerLoop(std::string shm_name, std::wstring device_id)
         }
 
         UINT32 padding = 0;
-        if (FAILED(audio_client->GetCurrentPadding(&padding))) {
+        HRESULT pad_hr = audio_client->GetCurrentPadding(&padding);
+        if (FAILED(pad_hr)) {
+            if (!stop_requested_.load(std::memory_order_relaxed)) {
+                std::cout << FormatHostDiagLine(
+                                 DiagCode::E501_AudioEndpointLost,
+                                 DiagSeverity::Warning,
+                                 "電腦端監聽音訊裝置 \"" + active_endpoint_name_ +
+                                     "\" 已中斷或拔除（OBS 內的 JCast for iOS (Audio) 仍正常運作）。")
+                          << "\n";
+            }
             break;
         }
         UINT32 avail_frames = (buffer_frames > padding) ? (buffer_frames - padding) : 0;

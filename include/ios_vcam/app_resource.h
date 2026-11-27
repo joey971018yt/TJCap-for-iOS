@@ -3,12 +3,12 @@
 #define IDI_APP_MAIN_ICON 101
 
 #define IOS_VCAM_VER_MAJOR 1
-#define IOS_VCAM_VER_MINOR 7
+#define IOS_VCAM_VER_MINOR 8
 #define IOS_VCAM_VER_PATCH 0
 #define IOS_VCAM_VER_BUILD 0
-#define IOS_VCAM_VER_STR          "1.7.0.0"
-#define IOS_VCAM_VER_DISPLAY_STR  "1.7.0"
-#define IOS_VCAM_VER_DISPLAY_WSTR L"1.7.0"
+#define IOS_VCAM_VER_STR          "1.8.0.0"
+#define IOS_VCAM_VER_DISPLAY_STR  "1.8.0"
+#define IOS_VCAM_VER_DISPLAY_WSTR L"1.8.0"
 
 #define IOS_VCAM_GITHUB_OWNER     "joey971018yt"
 #define IOS_VCAM_GITHUB_REPO      "iOS-usb-cam"
