@@ -56,6 +56,7 @@ constexpr UINT kWmUpdateCheckDone = WM_APP + 3;
 constexpr UINT_PTR kTimerRefreshId = 1;
 constexpr UINT_PTR kTimerStartupUpdateId = 2;
 constexpr UINT_PTR kTimerPreviewId = 3;
+constexpr UINT_PTR kTimerTelemetryId = 4;
 
 enum class DshowRegState {
     NotRegistered,
@@ -754,6 +755,86 @@ private:
     std::thread dl_thread_;
 };
 
+std::wstring FormatBytesCompactWide(uint64_t bytes) {
+    wchar_t buf[64] = {0};
+    if (bytes >= 1024ULL * 1024ULL * 1024ULL) {
+        std::swprintf(buf, 64, L"%.2f GB", static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0));
+    } else if (bytes >= 1024ULL * 1024ULL) {
+        std::swprintf(buf, 64, L"%.0f MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+    } else if (bytes >= 1024ULL) {
+        std::swprintf(buf, 64, L"%.0f KB", static_cast<double>(bytes) / 1024.0);
+    } else {
+        std::swprintf(buf, 64, L"%llu B", static_cast<unsigned long long>(bytes));
+    }
+    return buf;
+}
+
+std::wstring FormatLiveMonitorHudBadge(const StreamHealthSnapshot& s) {
+    if (!s.active || s.waiting_first_frame) {
+        return L"";
+    }
+    const wchar_t* grade_lbl = L"🟢 極佳";
+    if (s.grade == StreamHealthGrade::StaticVfr) {
+        grade_lbl = L"🔵 靜態VFR";
+    } else if (s.grade == StreamHealthGrade::Warning) {
+        grade_lbl = L"🟡 負載偏高";
+    }
+    const wchar_t* dec_lbl = s.mock_source ? L"自測" : (s.hw_accelerated ? L"D3D11VA" : L"CPU軟解");
+    wchar_t buf[192] = {0};
+    std::swprintf(
+        buf,
+        192,
+        L"%ls ｜ %.1f FPS ｜ %.1f Mbps ｜ 延遲 %.1f ms (%ls) ｜ %u×%u",
+        grade_lbl,
+        s.fps,
+        s.bitrate_mbps,
+        s.pipeline_latency_ms,
+        dec_lbl,
+        s.frame_width,
+        s.frame_height);
+    return buf;
+}
+
+void DrawSparklineGdi(
+    HDC hdc,
+    const RECT& rc,
+    const std::vector<double>& history,
+    double max_scale,
+    COLORREF stroke_color) {
+    int w = rc.right - rc.left;
+    int h = rc.bottom - rc.top;
+    if (w < 8 || h < 6) return;
+
+    HBRUSH box_bg = CreateSolidBrush(RGB(11, 15, 22));
+    HBRUSH box_bd = CreateSolidBrush(RGB(34, 44, 62));
+    FillRect(hdc, &rc, box_bg);
+    FrameRect(hdc, &rc, box_bd);
+    DeleteObject(box_bg);
+    DeleteObject(box_bd);
+
+    if (history.size() < 2 || max_scale <= 0.001) return;
+
+    HPEN pen = CreatePen(PS_SOLID, 1, stroke_color);
+    HGDIOBJ old_pen = SelectObject(hdc, pen);
+
+    const size_t n = history.size();
+    const int inner_w = w - 4;
+    const int inner_h = h - 4;
+    for (size_t i = 0; i < n; ++i) {
+        double norm = std::clamp(history[i] / max_scale, 0.0, 1.0);
+        int px = rc.left + 2 + static_cast<int>((static_cast<double>(i) * inner_w) / static_cast<double>(n - 1));
+        int py = rc.bottom - 2 - static_cast<int>(norm * inner_h + 0.5);
+        if (i == 0) {
+            MoveToEx(hdc, px, py, nullptr);
+        } else {
+            LineTo(hdc, px, py);
+        }
+    }
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen);
+}
+
 void DrawPreviewCanvasGdi(
     HDC dst_hdc,
     const RECT& target_rc,
@@ -997,6 +1078,7 @@ private:
     static constexpr int kCmdTopmost = 3004;
     static constexpr int kCmdFitAspect = 3005;
     static constexpr int kCmdClose = 3006;
+    static constexpr int kCmdToggleHud = 3007;
 
     void UpdateTitleBar() {
         if (!hwnd_ || fullscreen_) return;
@@ -1005,7 +1087,7 @@ private:
             t += L" (" + std::to_wstring(src_w_) + L"×" + std::to_wstring(src_h_) + L")";
         }
         if (topmost_) t += L" [📌置頂]";
-        t += L" — 雙擊/F11: 全螢幕 ｜ F12: 原畫質截圖 ｜ 右鍵: 選單";
+        t += L" — F11: 全螢幕 ｜ Tab/F3: 健康度HUD ｜ F12: 原畫質截圖 ｜ 右鍵: 選單";
         if (t != last_title_) {
             last_title_ = t;
             SetWindowTextW(hwnd_, t.c_str());
@@ -1033,7 +1115,7 @@ private:
                     SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
                 fullscreen_ = true;
                 force_refresh_ = true;
-                ShowToast(L"⛶ 已進入無邊框全螢幕（按 Esc 或雙擊退出）", 1800);
+                ShowToast(L"⛶ 已進入無邊框全螢幕（按 Esc 退出｜按 Tab 切換健康度 HUD）", 2000);
             }
         } else {
             SetWindowLongPtrW(hwnd_, GWL_STYLE, style_prev_);
@@ -1066,6 +1148,22 @@ private:
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         UpdateTitleBar();
         ShowToast(topmost_ ? L"📌 已開啟視窗永遠置頂" : L"📌 已取消視窗置頂", 1600);
+    }
+
+    void ToggleHud() {
+        show_hud_ = !show_hud_;
+        if (show_hud_) {
+            shm_.ReadStreamHealth(hud_snap_);
+            hud_text_ = FormatLiveMonitorHudBadge(hud_snap_);
+            if (hud_text_.empty()) {
+                ShowToast(L"📊 已開啟串流健康度 HUD（待投影訊號開始即顯示 FPS / Mbps / ms）", 1800);
+            } else {
+                InvalidateRect(hwnd_, nullptr, FALSE);
+            }
+        } else {
+            hud_text_.clear();
+            ShowToast(L"📊 已隱藏串流健康度 HUD（按 Tab 或 F3 可重新顯示）", 1600);
+        }
     }
 
     void FitWindowToSourceAspect() {
@@ -1109,6 +1207,11 @@ private:
         AppendMenuW(menu, MF_STRING, kCmdShot, L"📸 一鍵原畫質無損截圖 (PNG + 複製剪貼簿)\tF12 / Ctrl+S");
         AppendMenuW(menu, MF_STRING, kCmdOpenDir, L"📂 開啟截圖儲存資料夾");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(
+            menu,
+            MF_STRING | (show_hud_ ? MF_CHECKED : 0),
+            kCmdToggleHud,
+            L"📊 顯示即時串流健康度 HUD (FPS / Mbps / 延遲 ms)\tTab / F3");
         AppendMenuW(menu, MF_STRING | (fullscreen_ ? MF_CHECKED : 0), kCmdFullscreen, L"⛶ 無邊框全螢幕模式\tF11 / 雙擊");
         AppendMenuW(menu, MF_STRING | (topmost_ ? MF_CHECKED : 0), kCmdTopmost, L"📌 視窗永遠置頂 (Always on Top)\tCtrl+T");
         AppendMenuW(
@@ -1156,9 +1259,21 @@ private:
             &updated);
         force_refresh_ = false;
 
-        bool toast_expired = (!toast_text_.empty() && GetTickCount64() >= toast_until_ms_);
+        uint64_t now_tick = GetTickCount64();
+        bool toast_expired = (!toast_text_.empty() && now_tick >= toast_until_ms_);
         if (toast_expired) {
             toast_text_.clear();
+        }
+
+        bool hud_changed = false;
+        if (show_hud_ && (force || now_tick >= next_hud_sample_ms_)) {
+            next_hud_sample_ms_ = now_tick + 450ULL;
+            shm_.ReadStreamHealth(hud_snap_);
+            std::wstring next_hud = FormatLiveMonitorHudBadge(hud_snap_);
+            if (next_hud != hud_text_) {
+                hud_text_ = std::move(next_hud);
+                hud_changed = true;
+            }
         }
 
         if (alive) {
@@ -1171,12 +1286,13 @@ private:
             if (dim_changed) {
                 UpdateTitleBar();
             }
-            if (updated || dim_changed || toast_expired) {
+            if (updated || dim_changed || toast_expired || hud_changed) {
                 InvalidateRect(hwnd_, nullptr, FALSE);
             }
-        } else if (has_live_frame_ || toast_expired) {
+        } else if (has_live_frame_ || toast_expired || hud_changed) {
             has_live_frame_ = false;
             last_seq_ = 0;
+            hud_text_.clear();
             UpdateTitleBar();
             InvalidateRect(hwnd_, nullptr, FALSE);
         }
@@ -1222,6 +1338,8 @@ private:
                 if (!toast_text_.empty() && GetTickCount64() < toast_until_ms_) {
                     badge = toast_text_;
                     is_toast = true;
+                } else if (show_hud_ && has_live_frame_ && !hud_text_.empty()) {
+                    badge = hud_text_;
                 }
                 DrawPreviewCanvasGdi(
                     hdc,
@@ -1234,7 +1352,7 @@ private:
                     badge,
                     is_toast,
                     L"📺 等待 iPhone / iPad 投影訊號中...",
-                    L"於主控制台點擊「🚀 智慧一鍵啟動」後即顯示高畫質畫面（雙擊或按 F11 切換全螢幕｜F12 原畫質截圖）",
+                    L"於主控制台點擊「🚀 智慧一鍵啟動」後即顯示高畫質畫面（F11 全螢幕｜Tab 健康度 HUD｜F12 原畫質截圖）",
                     font_bold_,
                     font_normal_);
                 EndPaint(hwnd_, &ps);
@@ -1266,6 +1384,10 @@ private:
                     ToggleFullscreen();
                     return 0;
                 }
+                if (wParam == VK_TAB || wParam == VK_F3) {
+                    ToggleHud();
+                    return 0;
+                }
                 if (wParam == VK_F12 || (ctrl && wParam == 'S')) {
                     if (on_screenshot_) on_screenshot_(hwnd_);
                     return 0;
@@ -1285,6 +1407,10 @@ private:
                 }
                 if (id == kCmdOpenDir) {
                     if (on_open_folder_) on_open_folder_();
+                    return 0;
+                }
+                if (id == kCmdToggleHud) {
+                    ToggleHud();
                     return 0;
                 }
                 if (id == kCmdFullscreen) {
@@ -1336,6 +1462,10 @@ private:
 
     bool fullscreen_ = false;
     bool topmost_ = false;
+    bool show_hud_ = true;
+    uint64_t next_hud_sample_ms_ = 0;
+    StreamHealthSnapshot hud_snap_{};
+    std::wstring hud_text_;
     DWORD style_prev_ = 0;
     WINDOWPLACEMENT wp_prev_{};
     std::wstring last_title_;
@@ -1379,18 +1509,19 @@ public:
         wc.lpszClassName = L"JCastForIosGuiWndClass";
         RegisterClassExW(&wc);
 
-        int win_w = Scale(820, dpi);
-        int win_h = Scale(700, dpi);
-
         RECT work{};
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
-        int pos_x = work.left + ((work.right - work.left) - win_w) / 2;
-        int pos_y = work.top + ((work.bottom - work.top) - win_h) / 2;
+        int work_w = std::max<int>(640, work.right - work.left);
+        int work_h = std::max<int>(560, work.bottom - work.top);
+        int win_w = std::min<int>(Scale(820, dpi), work_w);
+        int win_h = std::min<int>(Scale(756, dpi), work_h);
+        int pos_x = work.left + (work_w - win_w) / 2;
+        int pos_y = std::max<int>(work.top, work.top + (work_h - win_h) / 2);
 
         hwnd_ = CreateWindowExW(
             0,
             wc.lpszClassName,
-            L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — 一鍵智慧擷取控制台 (即時預覽 × 原畫質截圖 × 2K+ 自適應)",
+            L"JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" — 智慧擷取控制台 (健康度儀表板 × 即時預覽 × 原畫質截圖)",
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
             pos_x, pos_y, win_w, win_h,
             nullptr, nullptr, hInst, this);
@@ -1438,6 +1569,8 @@ private:
         if (font_bold_) DeleteObject(font_bold_);
         if (font_title_) DeleteObject(font_title_);
         if (font_mono_) DeleteObject(font_mono_);
+        if (font_metric_) DeleteObject(font_metric_);
+        if (font_small_) DeleteObject(font_small_);
 
         auto make_font = [&](int pt_tenths, int weight, const wchar_t* face) {
             int height = -MulDiv(pt_tenths, static_cast<int>(dpi), 720);
@@ -1451,6 +1584,8 @@ private:
         font_bold_ = make_font(105, FW_SEMIBOLD, L"Microsoft JhengHei UI");
         font_title_ = make_font(125, FW_BOLD, L"Microsoft JhengHei UI");
         font_mono_ = make_font(92, FW_NORMAL, L"Consolas");
+        font_metric_ = make_font(132, FW_BOLD, L"Microsoft JhengHei UI");
+        font_small_ = make_font(85, FW_NORMAL, L"Microsoft JhengHei UI");
     }
 
     void BuildControls() {
@@ -1463,12 +1598,12 @@ private:
         int margin = Scale(18, dpi);
         int content_w = cw - margin * 2;
 
-        // Top banner: y = 14 .. 136
-        banner_rect_ = {margin, Scale(14, dpi), cw - margin, Scale(136, dpi)};
+        // Top banner: y = 10 .. 130
+        banner_rect_ = {margin, Scale(10, dpi), cw - margin, Scale(130, dpi)};
 
-        // Group 1: Preferences (y = 148 .. 302)
-        int grp1_y = Scale(148, dpi);
-        int grp1_h = Scale(154, dpi);
+        // Group 1: Preferences (y = 138 .. 290)
+        int grp1_y = Scale(138, dpi);
+        int grp1_h = Scale(152, dpi);
         HWND grp_pref = CreateWindowExW(
             0, L"BUTTON", L"擷取畫質上限（依 USB 速率自動開放選項）、比例與音訊設定",
             WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
@@ -1479,7 +1614,7 @@ private:
         int combo_w = content_w - lbl_w - Scale(28, dpi);
 
         // Row 0: Max Selectable Resolution & Adaptive Aspect Ratio
-        int row0_y = grp1_y + Scale(28, dpi);
+        int row0_y = grp1_y + Scale(26, dpi);
         HWND lbl_res = CreateWindowExW(
             0, L"STATIC", L"最大解析度與比例選項：",
             WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
@@ -1495,7 +1630,7 @@ private:
         PopulateResolutionOptionsForSpeed(UsbLinkSpeed::Unknown, true);
 
         // Row 1: Status bar style
-        int row1_y = grp1_y + Scale(60, dpi);
+        int row1_y = grp1_y + Scale(58, dpi);
         HWND lbl_bar = CreateWindowExW(
             0, L"STATIC", L"手機頂部狀態列樣式：",
             WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
@@ -1515,7 +1650,7 @@ private:
         SendMessageW(combo_status_bar_, CB_SETCURSEL, 0, 0);
 
         // Row 2: PC Audio Routing / Monitoring
-        int row2_y = grp1_y + Scale(92, dpi);
+        int row2_y = grp1_y + Scale(90, dpi);
         HWND lbl_aud = CreateWindowExW(
             0, L"STATIC", L"電腦端音訊監聽／轉發：",
             WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
@@ -1531,7 +1666,7 @@ private:
         PopulateAudioEndpoints();
 
         // Row 3: GPU Hardware Decode
-        int row3_y = grp1_y + Scale(124, dpi);
+        int row3_y = grp1_y + Scale(122, dpi);
         chk_hw_decode_ = CreateWindowExW(
             0, L"BUTTON", L"啟用 GPU 硬體超低延遲解碼 (D3D11VA，2K+60fps 建議保持開啟)",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
@@ -1540,9 +1675,9 @@ private:
         SendMessageW(chk_hw_decode_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
         SendMessageW(chk_hw_decode_, BM_SETCHECK, BST_CHECKED, 0);
 
-        // Group 2: One-Click Action Buttons (y = 312 .. 430)
-        int grp2_y = Scale(312, dpi);
-        int grp2_h = Scale(118, dpi);
+        // Group 2: One-Click Action Buttons (y = 298 .. 412)
+        int grp2_y = Scale(298, dpi);
+        int grp2_h = Scale(114, dpi);
         HWND grp_act = CreateWindowExW(
             0, L"BUTTON", L"一鍵自動化操作",
             WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
@@ -1551,15 +1686,15 @@ private:
 
         int btn_pad = Scale(14, dpi);
         int inner_w = content_w - btn_pad * 2;
-        int main_btn_y = grp2_y + Scale(26, dpi);
+        int main_btn_y = grp2_y + Scale(24, dpi);
         btn_smart_start_ = CreateWindowExW(
             0, L"BUTTON", L"🚀 智慧一鍵啟動（自動檢查安裝驅動 ➔ 開始 2K+ 原生投影）",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-            margin + btn_pad, main_btn_y, inner_w, Scale(42, dpi),
+            margin + btn_pad, main_btn_y, inner_w, Scale(40, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnSmartStart)), hinst_, nullptr);
         SendMessageW(btn_smart_start_, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
 
-        int sub_btn_y = main_btn_y + Scale(48, dpi);
+        int sub_btn_y = main_btn_y + Scale(46, dpi);
         int gap = Scale(8, dpi);
         int avail_btn_w = inner_w - gap * 4;
         int w_mock = avail_btn_w * 23 / 100;
@@ -1608,13 +1743,16 @@ private:
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnUninstall)), hinst_, nullptr);
         SendMessageW(btn_uninstall_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
 
-        // Group 3: Split Lower Section — Left: Live Diagnostics Log | Right: Low-Load Live Preview & 1:1 Lossless Screenshot
+        // Group 3: Live Stream Health Telemetry Dashboard (FPS / Bitrate Mbps / Decode Latency ms / Health Grade)
+        telemetry_rect_ = {margin, Scale(420, dpi), cw - margin, Scale(492, dpi)};
+
+        // Group 4: Split Lower Section — Left: Live Diagnostics Log | Right: Low-Load Live Preview & 1:1 Lossless Screenshot
         int split_gap = Scale(14, dpi);
         int left_w = (content_w - split_gap) * 53 / 100;
         int right_x = margin + left_w + split_gap;
         int right_w = (cw - margin) - right_x;
 
-        int log_lbl_y = Scale(440, dpi);
+        int log_lbl_y = Scale(500, dpi);
         HWND lbl_log = CreateWindowExW(
             0, L"STATIC",
             L"即時狀態、解析度比例與碼率監控日誌：",
@@ -1623,12 +1761,12 @@ private:
         SendMessageW(lbl_log, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
 
         int edit_y = log_lbl_y + Scale(24, dpi);
-        int bottom_margin = Scale(14, dpi);
+        int bottom_margin = Scale(12, dpi);
         int edit_h = (rc.bottom - rc.top) - edit_y - bottom_margin;
         edit_log_ = CreateWindowExW(
             WS_EX_CLIENTEDGE, L"EDIT", L"",
             WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
-            margin, edit_y, left_w, std::max(80, edit_h),
+            margin, edit_y, left_w, std::max(72, edit_h),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdEditLog)), hinst_, nullptr);
         SendMessageW(edit_log_, WM_SETFONT, reinterpret_cast<WPARAM>(font_mono_), TRUE);
         SendMessageW(edit_log_, EM_SETLIMITTEXT, 256 * 1024, 0);
@@ -1648,7 +1786,7 @@ private:
             right_x,
             edit_y,
             cw - margin,
-            std::max(edit_y + Scale(60, dpi), preview_btn_y - Scale(6, dpi)),
+            std::max(edit_y + Scale(54, dpi), preview_btn_y - Scale(6, dpi)),
         };
 
         int p_gap = Scale(6, dpi);
@@ -1692,11 +1830,13 @@ private:
 
         AppendLogLine(
             L"[歡迎] 歡迎使用 JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR
-            L"！新增「🎬 內建/獨立全螢幕即時預覽」與「📸 一鍵 2K+ 原畫質無損截圖 (F12)」！");
+            L"！新增「📊 即時串流健康度儀表板 (FPS / 碼率 Mbps / 解碼延遲 ms)」與全螢幕 HUD！");
         RefreshHealthAndUi(true);
+        TickTelemetryDashboard(true);
         SetTimer(hwnd_, kTimerRefreshId, 2000, nullptr);
         SetTimer(hwnd_, kTimerStartupUpdateId, 1500, nullptr);
         SetTimer(hwnd_, kTimerPreviewId, 33, nullptr);
+        SetTimer(hwnd_, kTimerTelemetryId, 500, nullptr);
     }
 
     void PopulateResolutionOptionsForSpeed(UsbLinkSpeed speed, bool is_initial) {
@@ -2257,7 +2397,10 @@ private:
         }
         running_mock_ = mock_mode;
         host_running_.store(true, std::memory_order_release);
+        fps_history_.clear();
+        mbps_history_.clear();
         RefreshHealthAndUi(false);
+        TickTelemetryDashboard(true);
 
         AppendLogLine(mock_mode ? L"=== 已啟動 JCast 免手機自測模式（彩條 + 48kHz 測試音） ==="
                                 : (L"=== 已啟動 JCast 有線投影｜本次鎖定選項：" + chosen_res_label + L" ==="));
@@ -2318,8 +2461,11 @@ private:
         }
         host_running_.store(false, std::memory_order_release);
         running_mock_ = false;
+        fps_history_.clear();
+        mbps_history_.clear();
         RefreshHealthAndUi(true);
         TickInlinePreview(true);
+        TickTelemetryDashboard(true);
     }
 
     void ShowAndCopyObsGuide() {
@@ -2545,6 +2691,306 @@ private:
         }
     }
 
+    void TickTelemetryDashboard(bool force) {
+        if (!hwnd_ || IsIconic(hwnd_)) return;
+
+        if (!telemetry_shm_.IsOpen()) {
+            telemetry_shm_.Open(kDefaultShmName);
+        }
+
+        StreamHealthSnapshot prev = telem_snap_;
+        bool ok = telemetry_shm_.ReadStreamHealth(telem_snap_);
+        if (!ok && host_running_.load(std::memory_order_acquire)) {
+            telem_snap_ = StreamHealthSnapshot{};
+            telem_snap_.active = true;
+            telem_snap_.waiting_first_frame = true;
+            telem_snap_.grade = StreamHealthGrade::WaitingStream;
+        }
+
+        constexpr size_t kMaxSparkSamples = 28;
+        if (telem_snap_.active && !telem_snap_.waiting_first_frame) {
+            fps_history_.push_back(telem_snap_.fps);
+            if (fps_history_.size() > kMaxSparkSamples) {
+                fps_history_.erase(fps_history_.begin());
+            }
+            mbps_history_.push_back(telem_snap_.bitrate_mbps);
+            if (mbps_history_.size() > kMaxSparkSamples) {
+                mbps_history_.erase(mbps_history_.begin());
+            }
+        } else if (!telem_snap_.active && (!fps_history_.empty() || !mbps_history_.empty())) {
+            fps_history_.clear();
+            mbps_history_.clear();
+        }
+
+        if (force || telem_snap_.active || prev.active != telem_snap_.active ||
+            prev.grade != telem_snap_.grade) {
+            InvalidateRect(hwnd_, &telemetry_rect_, FALSE);
+            if (inline_preview_enabled_ && inline_has_frame_) {
+                InvalidateRect(hwnd_, &preview_rect_, FALSE);
+            }
+        }
+    }
+
+    void PaintTelemetryDashboard(HDC dst_hdc) {
+        int w = telemetry_rect_.right - telemetry_rect_.left;
+        int h = telemetry_rect_.bottom - telemetry_rect_.top;
+        if (w <= 8 || h <= 8) return;
+
+        UINT dpi = GetSystemDpiSafe(hwnd_);
+        HDC mem_dc = CreateCompatibleDC(dst_hdc);
+        HBITMAP mem_bmp = CreateCompatibleBitmap(dst_hdc, w, h);
+        HGDIOBJ old_bmp = SelectObject(mem_dc, mem_bmp);
+
+        RECT local_rc{0, 0, w, h};
+        HBRUSH bg_br = CreateSolidBrush(RGB(16, 20, 29));
+        FillRect(mem_dc, &local_rc, bg_br);
+        DeleteObject(bg_br);
+
+        SetBkMode(mem_dc, TRANSPARENT);
+        HGDIOBJ old_font = SelectObject(mem_dc, font_small_);
+
+        const StreamHealthSnapshot& s = telem_snap_;
+        const bool streaming = s.active && !s.waiting_first_frame;
+        const int card_w = w / 4;
+        const int pad_x = Scale(11, dpi);
+        const int accent_h = std::max(2, Scale(3, dpi));
+
+        auto draw_card_frame = [&](int idx, COLORREF accent) {
+            int x0 = idx * card_w;
+            int x1 = (idx == 3) ? w : ((idx + 1) * card_w);
+            RECT top_bar{x0 + 1, 1, x1 - 1, 1 + accent_h};
+            HBRUSH acc_br = CreateSolidBrush(accent);
+            FillRect(mem_dc, &top_bar, acc_br);
+            DeleteObject(acc_br);
+            if (idx > 0) {
+                RECT div_rc{x0, Scale(8, dpi), x0 + 1, h - Scale(8, dpi)};
+                HBRUSH div_br = CreateSolidBrush(RGB(36, 46, 64));
+                FillRect(mem_dc, &div_rc, div_br);
+                DeleteObject(div_br);
+            }
+        };
+
+        // --- Card 0: Real-time FPS + Sparkline ---
+        COLORREF fps_col = RGB(100, 116, 139);
+        std::wstring fps_val = L"--.- fps";
+        std::wstring fps_sub = L"目標 60fps 低抖動輸出";
+        if (s.waiting_first_frame) {
+            fps_col = RGB(251, 191, 36);
+            fps_val = L"等待中...";
+            fps_sub = L"等待手機傳送首張影格";
+        } else if (streaming) {
+            wchar_t vbuf[48] = {0};
+            std::swprintf(vbuf, 48, L"%.1f fps", s.fps);
+            fps_val = vbuf;
+            if (s.grade == StreamHealthGrade::StaticVfr) {
+                fps_col = RGB(96, 165, 250);
+            } else if (s.fps >= 45.0) {
+                fps_col = RGB(74, 222, 128);
+            } else if (s.fps >= 22.0) {
+                fps_col = RGB(251, 191, 36);
+            } else {
+                fps_col = RGB(248, 113, 113);
+            }
+            wchar_t sbuf[80] = {0};
+            std::swprintf(
+                sbuf,
+                80,
+                L"累計 %llu 幀 ｜ 掉幀 %u",
+                static_cast<unsigned long long>(s.total_frames),
+                s.dropped_frames);
+            fps_sub = sbuf;
+        }
+        draw_card_frame(0, streaming ? fps_col : RGB(51, 65, 85));
+        {
+            int x0 = 0, x1 = card_w;
+            SelectObject(mem_dc, font_small_);
+            SetTextColor(mem_dc, RGB(148, 163, 184));
+            RECT hdr_rc{x0 + pad_x, Scale(6, dpi), x1 - Scale(64, dpi), Scale(23, dpi)};
+            DrawTextW(mem_dc, L"🎞 即時幀率", -1, &hdr_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+            RECT spk_rc{x1 - Scale(60, dpi), Scale(6, dpi), x1 - Scale(8, dpi), Scale(23, dpi)};
+            DrawSparklineGdi(mem_dc, spk_rc, fps_history_, 65.0, fps_col);
+
+            SelectObject(mem_dc, font_metric_);
+            SetTextColor(mem_dc, fps_col);
+            RECT val_rc{x0 + pad_x, Scale(23, dpi), x1 - pad_x, Scale(50, dpi)};
+            DrawTextW(mem_dc, fps_val.c_str(), -1, &val_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+            SelectObject(mem_dc, font_small_);
+            SetTextColor(mem_dc, RGB(130, 145, 168));
+            RECT sub_rc{x0 + pad_x, Scale(50, dpi), x1 - Scale(6, dpi), h - Scale(3, dpi)};
+            DrawTextW(mem_dc, fps_sub.c_str(), -1, &sub_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
+
+        // --- Card 1: Real-time Bitrate Mbps + Sparkline ---
+        COLORREF mbps_col = streaming ? RGB(56, 189, 248) : RGB(100, 116, 139);
+        std::wstring mbps_val = L"--.- Mbps";
+        std::wstring mbps_sub = L"USB 動態高畫質 H.264";
+        if (s.waiting_first_frame) {
+            mbps_val = L"0.0 Mbps";
+            mbps_sub = L"握手協調串流通道中";
+        } else if (streaming) {
+            wchar_t vbuf[48] = {0};
+            std::swprintf(vbuf, 48, L"%.1f Mbps", s.bitrate_mbps);
+            mbps_val = vbuf;
+            std::wstring tot_str = FormatBytesCompactWide(s.total_video_bytes);
+            wchar_t sbuf[96] = {0};
+            std::swprintf(sbuf, 96, L"峰值 %.1fM ｜ 累計 %ls", s.peak_bitrate_mbps, tot_str.c_str());
+            mbps_sub = sbuf;
+        }
+        draw_card_frame(1, streaming ? mbps_col : RGB(51, 65, 85));
+        {
+            int x0 = card_w, x1 = card_w * 2;
+            SelectObject(mem_dc, font_small_);
+            SetTextColor(mem_dc, RGB(148, 163, 184));
+            RECT hdr_rc{x0 + pad_x, Scale(6, dpi), x1 - Scale(64, dpi), Scale(23, dpi)};
+            DrawTextW(mem_dc, L"📡 傳輸碼率", -1, &hdr_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+            RECT spk_rc{x1 - Scale(60, dpi), Scale(6, dpi), x1 - Scale(8, dpi), Scale(23, dpi)};
+            double spk_max = std::max(12.0, s.peak_bitrate_mbps * 1.15);
+            DrawSparklineGdi(mem_dc, spk_rc, mbps_history_, spk_max, RGB(56, 189, 248));
+
+            SelectObject(mem_dc, font_metric_);
+            SetTextColor(mem_dc, mbps_col);
+            RECT val_rc{x0 + pad_x, Scale(23, dpi), x1 - pad_x, Scale(50, dpi)};
+            DrawTextW(mem_dc, mbps_val.c_str(), -1, &val_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+            SelectObject(mem_dc, font_small_);
+            SetTextColor(mem_dc, RGB(130, 145, 168));
+            RECT sub_rc{x0 + pad_x, Scale(50, dpi), x1 - Scale(6, dpi), h - Scale(3, dpi)};
+            DrawTextW(mem_dc, mbps_sub.c_str(), -1, &sub_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
+
+        // --- Card 2: Decode & Pipeline Latency (ms) + Engine Pill ---
+        COLORREF lat_col = RGB(100, 116, 139);
+        std::wstring lat_val = L"--.- ms";
+        std::wstring lat_sub = L"H.264 解碼 + 畫布處理";
+        if (streaming) {
+            wchar_t vbuf[48] = {0};
+            std::swprintf(vbuf, 48, L"%.1f ms", s.pipeline_latency_ms);
+            lat_val = vbuf;
+            if (s.pipeline_latency_ms <= 6.5) {
+                lat_col = RGB(74, 222, 128);
+            } else if (s.pipeline_latency_ms <= 14.0) {
+                lat_col = RGB(251, 191, 36);
+            } else {
+                lat_col = RGB(248, 113, 113);
+            }
+            int budget_pct = std::clamp(static_cast<int>(s.pipeline_latency_ms * 100.0 / 16.667 + 0.5), 1, 999);
+            wchar_t sbuf[96] = {0};
+            std::swprintf(sbuf, 96, L"純解碼 %.1fms ｜ 60幀預算 %d%%", s.decode_latency_ms, budget_pct);
+            lat_sub = sbuf;
+        }
+        draw_card_frame(2, streaming ? lat_col : RGB(51, 65, 85));
+        {
+            int x0 = card_w * 2, x1 = card_w * 3;
+            SelectObject(mem_dc, font_small_);
+            SetTextColor(mem_dc, RGB(148, 163, 184));
+            RECT hdr_rc{x0 + pad_x, Scale(6, dpi), x1 - Scale(66, dpi), Scale(23, dpi)};
+            DrawTextW(mem_dc, L"⚡ 解碼延遲", -1, &hdr_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+            if (streaming) {
+                const wchar_t* eng_txt = s.mock_source ? L"自測" : (s.hw_accelerated ? L"D3D11VA" : L"CPU軟解");
+                COLORREF pill_bg = s.mock_source
+                                       ? RGB(14, 58, 78)
+                                       : (s.hw_accelerated ? RGB(14, 68, 44) : RGB(84, 52, 12));
+                COLORREF pill_fg = s.mock_source
+                                       ? RGB(125, 211, 252)
+                                       : (s.hw_accelerated ? RGB(110, 231, 183) : RGB(253, 211, 77));
+                RECT pill_rc{x1 - Scale(64, dpi), Scale(6, dpi), x1 - Scale(8, dpi), Scale(23, dpi)};
+                HBRUSH pb = CreateSolidBrush(pill_bg);
+                FillRect(mem_dc, &pill_rc, pb);
+                DeleteObject(pb);
+                SetTextColor(mem_dc, pill_fg);
+                DrawTextW(mem_dc, eng_txt, -1, &pill_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            }
+
+            SelectObject(mem_dc, font_metric_);
+            SetTextColor(mem_dc, lat_col);
+            RECT val_rc{x0 + pad_x, Scale(23, dpi), x1 - pad_x, Scale(50, dpi)};
+            DrawTextW(mem_dc, lat_val.c_str(), -1, &val_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+            SelectObject(mem_dc, font_small_);
+            SetTextColor(mem_dc, RGB(130, 145, 168));
+            RECT sub_rc{x0 + pad_x, Scale(50, dpi), x1 - Scale(6, dpi), h - Scale(3, dpi)};
+            DrawTextW(mem_dc, lat_sub.c_str(), -1, &sub_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
+
+        // --- Card 3: Overall Stream Health Grade & Resolution/Audio Diagnostics ---
+        COLORREF grd_col = RGB(148, 163, 184);
+        std::wstring grd_val = L"⚪ 待機未啟動";
+        std::wstring grd_sub = L"啟動投影後即時診斷健康度";
+        switch (s.grade) {
+            case StreamHealthGrade::Excellent:
+                grd_col = RGB(74, 222, 128);
+                grd_val = s.mock_source ? L"🟢 極佳 (自測)" : L"🟢 極佳 · 低延遲";
+                break;
+            case StreamHealthGrade::StaticVfr:
+                grd_col = RGB(96, 165, 250);
+                grd_val = L"🔵 靜態省電 VFR";
+                break;
+            case StreamHealthGrade::Warning:
+                grd_col = RGB(251, 191, 36);
+                grd_val = (s.pipeline_latency_ms > 14.0 || s.decode_latency_ms > 12.0)
+                              ? L"🟡 解碼負載偏高"
+                              : L"🟡 幀率/頻寬受限";
+                break;
+            case StreamHealthGrade::WaitingStream:
+                grd_col = RGB(251, 191, 36);
+                grd_val = L"⏳ 等待手機訊號";
+                grd_sub = L"請解鎖手機並點信任電腦";
+                break;
+            case StreamHealthGrade::Idle:
+            default:
+                break;
+        }
+        if (streaming) {
+            if (s.grade == StreamHealthGrade::StaticVfr) {
+                grd_sub = L"畫面靜止自動降頻 (滑動即60幀)";
+            } else if (s.grade == StreamHealthGrade::Warning && !s.hw_accelerated) {
+                grd_sub = L"建議勾選開啟 D3D11VA 硬解";
+            } else {
+                wchar_t sbuf[96] = {0};
+                std::swprintf(
+                    sbuf,
+                    96,
+                    L"%u×%u ｜ 音訊 %llu 包",
+                    s.frame_width,
+                    s.frame_height,
+                    static_cast<unsigned long long>(s.total_audio_packets));
+                grd_sub = sbuf;
+            }
+        }
+        draw_card_frame(3, s.active ? grd_col : RGB(51, 65, 85));
+        {
+            int x0 = card_w * 3, x1 = w;
+            SelectObject(mem_dc, font_small_);
+            SetTextColor(mem_dc, RGB(148, 163, 184));
+            RECT hdr_rc{x0 + pad_x, Scale(6, dpi), x1 - pad_x, Scale(23, dpi)};
+            DrawTextW(mem_dc, L"🩺 串流健康度診斷", -1, &hdr_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+            SelectObject(mem_dc, font_bold_);
+            SetTextColor(mem_dc, grd_col);
+            RECT val_rc{x0 + pad_x, Scale(24, dpi), x1 - Scale(6, dpi), Scale(49, dpi)};
+            DrawTextW(mem_dc, grd_val.c_str(), -1, &val_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+            SelectObject(mem_dc, font_small_);
+            SetTextColor(mem_dc, RGB(130, 145, 168));
+            RECT sub_rc{x0 + pad_x, Scale(50, dpi), x1 - Scale(6, dpi), h - Scale(3, dpi)};
+            DrawTextW(mem_dc, grd_sub.c_str(), -1, &sub_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
+
+        HBRUSH border_br = CreateSolidBrush(RGB(52, 65, 88));
+        FrameRect(mem_dc, &local_rc, border_br);
+        DeleteObject(border_br);
+
+        SelectObject(mem_dc, old_font);
+        BitBlt(dst_hdc, telemetry_rect_.left, telemetry_rect_.top, w, h, mem_dc, 0, 0, SRCCOPY);
+        SelectObject(mem_dc, old_bmp);
+        DeleteObject(mem_bmp);
+        DeleteDC(mem_dc);
+    }
+
     void PaintInlinePreview(HDC hdc) {
         std::wstring badge;
         bool is_toast = false;
@@ -2552,7 +2998,20 @@ private:
             badge = inline_toast_text_;
             is_toast = true;
         } else if (inline_preview_enabled_ && inline_has_frame_ && inline_src_w_ > 0 && inline_src_h_ > 0) {
-            badge = L"● LIVE " + std::to_wstring(inline_src_w_) + L"×" + std::to_wstring(inline_src_h_);
+            if (telem_snap_.active && !telem_snap_.waiting_first_frame) {
+                wchar_t bbuf[96] = {0};
+                std::swprintf(
+                    bbuf,
+                    96,
+                    L"● LIVE %u×%u · %.0ffps · %.1fms",
+                    inline_src_w_,
+                    inline_src_h_,
+                    telem_snap_.fps,
+                    telem_snap_.pipeline_latency_ms);
+                badge = bbuf;
+            } else {
+                badge = L"● LIVE " + std::to_wstring(inline_src_w_) + L"×" + std::to_wstring(inline_src_h_);
+            }
         }
 
         std::wstring idle_title = inline_preview_enabled_
@@ -2650,6 +3109,7 @@ private:
                 PAINTSTRUCT ps{};
                 HDC hdc = BeginPaint(hwnd_, &ps);
                 PaintStatusBanner(hdc);
+                PaintTelemetryDashboard(hdc);
                 PaintInlinePreview(hdc);
                 EndPaint(hwnd_, &ps);
                 return 0;
@@ -2695,6 +3155,8 @@ private:
                     }
                 } else if (wParam == kTimerPreviewId) {
                     TickInlinePreview(false);
+                } else if (wParam == kTimerTelemetryId) {
+                    TickTelemetryDashboard(false);
                 }
                 return 0;
 
@@ -2819,10 +3281,12 @@ private:
                 KillTimer(hwnd_, kTimerRefreshId);
                 KillTimer(hwnd_, kTimerStartupUpdateId);
                 KillTimer(hwnd_, kTimerPreviewId);
+                KillTimer(hwnd_, kTimerTelemetryId);
                 if (live_monitor_) {
                     live_monitor_->CloseMonitor();
                 }
                 preview_shm_.Close();
+                telemetry_shm_.Close();
                 if (host_running_.load(std::memory_order_acquire)) {
                     StopHostProcess();
                 }
@@ -2837,6 +3301,8 @@ private:
                 if (font_bold_) DeleteObject(font_bold_);
                 if (font_title_) DeleteObject(font_title_);
                 if (font_mono_) DeleteObject(font_mono_);
+                if (font_metric_) DeleteObject(font_metric_);
+                if (font_small_) DeleteObject(font_small_);
                 if (icon_big_) DestroyIcon(icon_big_);
                 if (icon_small_) DestroyIcon(icon_small_);
                 if (icon_banner_) DestroyIcon(icon_banner_);
@@ -2860,6 +3326,7 @@ private:
     HICON icon_banner_ = nullptr;
 
     RECT banner_rect_{};
+    RECT telemetry_rect_{};
     RECT preview_rect_{};
     HWND combo_res_mode_ = nullptr;
     HWND combo_status_bar_ = nullptr;
@@ -2881,8 +3348,15 @@ private:
     HFONT font_bold_ = nullptr;
     HFONT font_title_ = nullptr;
     HFONT font_mono_ = nullptr;
+    HFONT font_metric_ = nullptr;
+    HFONT font_small_ = nullptr;
 
     std::vector<std::wstring> audio_endpoint_matches_;
+
+    SharedCaptureConsumer telemetry_shm_;
+    StreamHealthSnapshot telem_snap_{};
+    std::vector<double> fps_history_;
+    std::vector<double> mbps_history_;
 
     SharedCaptureConsumer preview_shm_;
     bool inline_preview_enabled_ = true;

@@ -22,6 +22,25 @@ uint64_t MonotonicMillisNow() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
 }
 
+StreamHealthGrade EvaluateStreamHealthGrade(const StreamHealthSnapshot& s) {
+    if (!s.active) {
+        return StreamHealthGrade::Idle;
+    }
+    if (s.waiting_first_frame) {
+        return StreamHealthGrade::WaitingStream;
+    }
+    if (s.pipeline_latency_ms > 14.0 || s.decode_latency_ms > 12.0) {
+        return StreamHealthGrade::Warning;
+    }
+    if (!s.mock_source && (s.last_frame_age_ms > 450ULL || (s.fps < 18.0 && s.bitrate_mbps < 3.5))) {
+        return StreamHealthGrade::StaticVfr;
+    }
+    if (s.fps < 22.0 && s.bitrate_mbps >= 3.5) {
+        return StreamHealthGrade::Warning;
+    }
+    return StreamHealthGrade::Excellent;
+}
+
 SharedCaptureProducer::~SharedCaptureProducer() {
     Close();
 }
@@ -83,6 +102,10 @@ bool SharedCaptureProducer::Open(const std::string& shm_name) {
     }
 #endif
 
+    layout_->total_video_bytes.store(0, std::memory_order_release);
+    layout_->total_audio_packets.store(0, std::memory_order_release);
+    layout_->live_bitrate_kbps.store(0, std::memory_order_release);
+    layout_->live_fps_x100.store(0, std::memory_order_release);
     TouchHeartbeat(true);
     return true;
 }
@@ -90,6 +113,7 @@ bool SharedCaptureProducer::Open(const std::string& shm_name) {
 void SharedCaptureProducer::Close() {
     if (layout_) {
         layout_->producer_streaming.store(0, std::memory_order_release);
+        layout_->producer_heartbeat_ms.store(0, std::memory_order_release);
 #ifdef _WIN32
         UnmapViewOfFile(layout_);
 #else
@@ -123,6 +147,16 @@ void SharedCaptureProducer::SetAdvertisedDimensions(uint32_t width, uint32_t hei
     layout_->active_height.store(ah, std::memory_order_release);
 }
 
+void SharedCaptureProducer::AddEncodedVideoBytes(uint64_t byte_count) {
+    if (!layout_ || byte_count == 0) return;
+    layout_->total_video_bytes.fetch_add(byte_count, std::memory_order_acq_rel);
+}
+
+void SharedCaptureProducer::SetAudioPacketCount(uint64_t packet_count) {
+    if (!layout_) return;
+    layout_->total_audio_packets.store(packet_count, std::memory_order_release);
+}
+
 uint8_t* SharedCaptureProducer::AcquireBackbufferSlot(uint32_t& out_slot_index) {
     if (!layout_) {
         out_slot_index = 0;
@@ -143,27 +177,43 @@ void SharedCaptureProducer::PublishBackbufferSlot(
     uint64_t pts_ns,
     uint32_t src_width,
     uint32_t src_height,
-    uint32_t bitrate_kbps) {
+    uint32_t bitrate_kbps,
+    const FrameTelemetryMeta& meta) {
     if (!layout_ || slot_index >= kVideoSlotCount) {
         return;
     }
     uint32_t fw = 0, fh = 0;
     AlignAdaptiveDimensions(frame_width, frame_height, fw, fh);
 
+    uint64_t now_ms = MonotonicMillisNow();
     uint64_t seq = layout_->total_video_frames.load(std::memory_order_relaxed) + 1ULL;
-    layout_->slot_headers[slot_index].frame_seq = seq;
-    layout_->slot_headers[slot_index].pts_ns = pts_ns;
-    layout_->slot_headers[slot_index].frame_width = fw;
-    layout_->slot_headers[slot_index].frame_height = fh;
-    layout_->slot_headers[slot_index].source_width = src_width > 0 ? src_width : fw;
-    layout_->slot_headers[slot_index].source_height = src_height > 0 ? src_height : fh;
-    layout_->slot_headers[slot_index].bitrate_kbps = bitrate_kbps;
+    VideoSlotHeader& hdr = layout_->slot_headers[slot_index];
+    hdr.frame_seq = seq;
+    hdr.pts_ns = pts_ns;
+    hdr.frame_width = fw;
+    hdr.frame_height = fh;
+    hdr.source_width = src_width > 0 ? src_width : fw;
+    hdr.source_height = src_height > 0 ? src_height : fh;
+    hdr.bitrate_kbps = bitrate_kbps;
+    hdr.fps_x100 = meta.fps_x100;
+    hdr.decode_latency_us = meta.decode_latency_us;
+    hdr.pipeline_latency_us = meta.pipeline_latency_us;
+    hdr.stream_flags = meta.stream_flags;
+    hdr.dropped_frames = meta.dropped_frames;
+    hdr.publish_mono_ms = now_ms;
 
     layout_->active_width.store(fw, std::memory_order_release);
     layout_->active_height.store(fh, std::memory_order_release);
+    if (bitrate_kbps > 0) {
+        layout_->live_bitrate_kbps.store(bitrate_kbps, std::memory_order_release);
+    }
+    if (meta.fps_x100 > 0) {
+        layout_->live_fps_x100.store(meta.fps_x100, std::memory_order_release);
+    }
     layout_->latest_video_slot.store(slot_index, std::memory_order_release);
     layout_->total_video_frames.store(seq, std::memory_order_release);
-    TouchHeartbeat(true);
+    layout_->producer_heartbeat_ms.store(now_ms, std::memory_order_release);
+    layout_->producer_streaming.store(1U, std::memory_order_release);
 
     write_slot_cursor_ = (slot_index + 1U) % static_cast<uint32_t>(kVideoSlotCount);
 }
@@ -175,7 +225,8 @@ void SharedCaptureProducer::PublishNV12Frame(
     uint64_t pts_ns,
     uint32_t src_width,
     uint32_t src_height,
-    uint32_t bitrate_kbps) {
+    uint32_t bitrate_kbps,
+    const FrameTelemetryMeta& meta) {
     if (!layout_ || !nv12_data) {
         return;
     }
@@ -191,7 +242,7 @@ void SharedCaptureProducer::PublishNV12Frame(
         return;
     }
     std::memcpy(dst, nv12_data, frame_bytes);
-    PublishBackbufferSlot(slot, fw, fh, pts_ns, src_width, src_height, bitrate_kbps);
+    PublishBackbufferSlot(slot, fw, fh, pts_ns, src_width, src_height, bitrate_kbps, meta);
 }
 
 void SharedCaptureProducer::PushAudioPcmS16LE(const int16_t* stereo_samples, size_t stereo_frame_count) {
@@ -296,6 +347,12 @@ void SharedCaptureConsumer::Close() {
     }
 #endif
     audio_cursor_initialized_ = false;
+    telem_prev_mono_ms_ = 0;
+    telem_prev_frames_ = 0;
+    telem_prev_bytes_ = 0;
+    telem_ema_fps_ = 0.0;
+    telem_ema_mbps_ = 0.0;
+    telem_peak_mbps_ = 0.0;
 }
 
 bool SharedCaptureConsumer::IsProducerAlive(uint64_t max_age_ms) const {
@@ -461,6 +518,117 @@ bool SharedCaptureConsumer::CaptureLatestFullResBGRA32(
     ConvertNV12ToBGRA32TopDown(layout_->video_slots[slot], fw, fh, out_bgra_topdown.data());
     out_width = fw;
     out_height = fh;
+    return true;
+}
+
+bool SharedCaptureConsumer::ReadStreamHealth(StreamHealthSnapshot& out_snapshot) {
+    auto reset_telem = [&]() {
+        telem_prev_mono_ms_ = 0;
+        telem_prev_frames_ = 0;
+        telem_prev_bytes_ = 0;
+        telem_ema_fps_ = 0.0;
+        telem_ema_mbps_ = 0.0;
+        telem_peak_mbps_ = 0.0;
+        out_snapshot = StreamHealthSnapshot{};
+    };
+
+    if (!layout_) {
+        reset_telem();
+        return false;
+    }
+
+    uint64_t hb = layout_->producer_heartbeat_ms.load(std::memory_order_acquire);
+    uint64_t now_ms = MonotonicMillisNow();
+    bool hb_fresh = (hb > 0) && ((now_ms >= hb) ? ((now_ms - hb) <= 2200ULL) : true);
+    if (!hb_fresh) {
+        reset_telem();
+        return false;
+    }
+
+    uint32_t streaming = layout_->producer_streaming.load(std::memory_order_acquire);
+    uint64_t cur_frames = layout_->total_video_frames.load(std::memory_order_acquire);
+    if (streaming == 0U || cur_frames == 0ULL) {
+        telem_prev_mono_ms_ = 0;
+        out_snapshot = StreamHealthSnapshot{};
+        out_snapshot.active = true;
+        out_snapshot.waiting_first_frame = true;
+        out_snapshot.grade = StreamHealthGrade::WaitingStream;
+        return true;
+    }
+
+    uint32_t slot = layout_->latest_video_slot.load(std::memory_order_acquire);
+    if (slot >= kVideoSlotCount) {
+        reset_telem();
+        return false;
+    }
+
+    const VideoSlotHeader hdr = layout_->slot_headers[slot];
+    uint64_t cur_bytes = layout_->total_video_bytes.load(std::memory_order_acquire);
+    uint64_t cur_aud = layout_->total_audio_packets.load(std::memory_order_acquire);
+    uint64_t age_ms =
+        (hdr.publish_mono_ms > 0 && now_ms >= hdr.publish_mono_ms) ? (now_ms - hdr.publish_mono_ms) : 0ULL;
+
+    double host_fps = static_cast<double>(hdr.fps_x100) / 100.0;
+    double host_mbps = static_cast<double>(hdr.bitrate_kbps) / 1000.0;
+
+    if (telem_prev_mono_ms_ == 0 || cur_frames < telem_prev_frames_ || cur_bytes < telem_prev_bytes_) {
+        telem_prev_mono_ms_ = now_ms;
+        telem_prev_frames_ = cur_frames;
+        telem_prev_bytes_ = cur_bytes;
+        telem_ema_fps_ = (age_ms > 800ULL) ? 0.0 : host_fps;
+        telem_ema_mbps_ = (age_ms > 800ULL) ? 0.0 : host_mbps;
+    } else if (now_ms > telem_prev_mono_ms_) {
+        double dt_sec = static_cast<double>(now_ms - telem_prev_mono_ms_) / 1000.0;
+        if (dt_sec >= 0.20) {
+            uint64_t df = cur_frames - telem_prev_frames_;
+            uint64_t db = cur_bytes - telem_prev_bytes_;
+            double inst_fps = static_cast<double>(df) / dt_sec;
+            double inst_mbps = (static_cast<double>(db) * 8.0) / (dt_sec * 1e6);
+
+            if (df == 0 && age_ms > 500ULL) {
+                telem_ema_fps_ = (telem_ema_fps_ < 0.4) ? 0.0 : (telem_ema_fps_ * 0.35);
+                telem_ema_mbps_ = (telem_ema_mbps_ < 0.08) ? 0.0 : (telem_ema_mbps_ * 0.35);
+            } else {
+                telem_ema_fps_ = (telem_ema_fps_ <= 0.1) ? inst_fps : (telem_ema_fps_ * 0.50 + inst_fps * 0.50);
+                telem_ema_mbps_ = (telem_ema_mbps_ <= 0.05) ? inst_mbps : (telem_ema_mbps_ * 0.50 + inst_mbps * 0.50);
+            }
+            telem_prev_mono_ms_ = now_ms;
+            telem_prev_frames_ = cur_frames;
+            telem_prev_bytes_ = cur_bytes;
+        } else {
+            if (host_fps > 0.0 && telem_ema_fps_ <= 0.01 && age_ms <= 500ULL) {
+                telem_ema_fps_ = host_fps;
+            }
+            if (host_mbps > 0.0 && telem_ema_mbps_ <= 0.01 && age_ms <= 500ULL) {
+                telem_ema_mbps_ = host_mbps;
+            }
+        }
+    }
+
+    telem_peak_mbps_ = std::max({telem_peak_mbps_, telem_ema_mbps_, host_mbps});
+
+    out_snapshot = StreamHealthSnapshot{};
+    out_snapshot.active = true;
+    out_snapshot.waiting_first_frame = false;
+    out_snapshot.fps = telem_ema_fps_;
+    out_snapshot.bitrate_mbps = telem_ema_mbps_;
+    out_snapshot.peak_bitrate_mbps = telem_peak_mbps_;
+    out_snapshot.decode_latency_ms = static_cast<double>(hdr.decode_latency_us) / 1000.0;
+    out_snapshot.pipeline_latency_ms = static_cast<double>(hdr.pipeline_latency_us) / 1000.0;
+    out_snapshot.frame_width = hdr.frame_width;
+    out_snapshot.frame_height = hdr.frame_height;
+    out_snapshot.source_width = hdr.source_width;
+    out_snapshot.source_height = hdr.source_height;
+    out_snapshot.total_frames = cur_frames;
+    out_snapshot.total_video_bytes = cur_bytes;
+    out_snapshot.total_audio_packets = cur_aud;
+    out_snapshot.dropped_frames = hdr.dropped_frames;
+    out_snapshot.last_frame_age_ms = age_ms;
+    out_snapshot.hw_accelerated = (hdr.stream_flags & kStreamFlagHwAccelerated) != 0;
+    out_snapshot.mock_source = (hdr.stream_flags & kStreamFlagMockSource) != 0;
+    out_snapshot.adaptive_res = (hdr.stream_flags & kStreamFlagAdaptiveRes) != 0;
+    out_snapshot.usb_speed_code = static_cast<uint8_t>((hdr.stream_flags >> 8) & 0xFU);
+    out_snapshot.grade = EvaluateStreamHealthGrade(out_snapshot);
     return true;
 }
 

@@ -160,16 +160,32 @@ int RunMockPipeline(SharedCaptureProducer& producer, const HostOptions& opts) {
     double phase_l = 0.0;
     double phase_r = 0.0;
     constexpr double kTwoPi = 6.28318530717958647692;
+    constexpr uint64_t kMockSynthBytesPerFrame = 37500ULL;  // Simulated 18.0 Mbps @ 60fps test stream
+    uint32_t ema_pipe_us = 450U;
 
     auto next_tick = std::chrono::steady_clock::now();
 
     while (!g_stop_flag.load(std::memory_order_relaxed)) {
+        auto t0 = std::chrono::steady_clock::now();
         uint32_t slot = 0;
         uint8_t* dst_nv12 = producer.AcquireBackbufferSlot(slot);
         if (dst_nv12) {
             GenerateAnimatedColorBarsNV12(dst_nv12, mock_w, mock_h, frame_idx);
+            auto t1 = std::chrono::steady_clock::now();
+            uint32_t cur_us = static_cast<uint32_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count());
+            ema_pipe_us = (frame_idx == 0) ? cur_us : ((ema_pipe_us * 3U + cur_us) / 4U);
+
+            producer.AddEncodedVideoBytes(kMockSynthBytesPerFrame);
+            FrameTelemetryMeta meta{};
+            meta.fps_x100 = 6000U;
+            meta.decode_latency_us = ema_pipe_us / 2U;
+            meta.pipeline_latency_us = std::max(100U, ema_pipe_us);
+            meta.stream_flags = kStreamFlagHwAccelerated | kStreamFlagMockSource | kStreamFlagAdaptiveRes;
+            meta.dropped_frames = 0U;
+
             producer.PublishBackbufferSlot(
-                slot, mock_w, mock_h, frame_idx * kFrameIntervalNs, mock_w, mock_h, 0);
+                slot, mock_w, mock_h, frame_idx * kFrameIntervalNs, mock_w, mock_h, 18000U, meta);
         }
 
         for (size_t i = 0; i < kAudioFramesPerVideoFrame; ++i) {
@@ -181,11 +197,12 @@ int RunMockPipeline(SharedCaptureProducer& producer, const HostOptions& opts) {
             if (phase_r > kTwoPi) phase_r -= kTwoPi;
         }
         producer.PushAudioPcmS16LE(pcm_chunk.data(), kAudioFramesPerVideoFrame);
+        producer.SetAudioPacketCount(frame_idx + 1ULL);
 
         ++frame_idx;
         if (frame_idx % 300 == 0) {
             std::cout << "[Mock] Published " << frame_idx << " frames (" << mock_w << "x" << mock_h
-                      << "@60fps, 48kHz Stereo)\n";
+                      << "@60fps, Latency: " << (ema_pipe_us / 1000.0) << " ms, 48kHz Stereo)\n";
         }
 
         next_tick += std::chrono::nanoseconds(kFrameIntervalNs);
@@ -339,16 +356,18 @@ int main(int argc, char** argv) {
                 last_log = now;
             }
             for (int i = 0; i < 15 && !g_stop_flag.load(std::memory_order_relaxed); ++i) {
+                producer.TouchHeartbeat(false);
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
             continue;
         }
 
         // Determine maximum resolution ceiling ONCE at session start (never auto-modified during streaming!)
+        const UsbLinkSpeed conn_speed = usb.ConnectedLinkSpeed();
         const uint32_t locked_max_dim =
             (opts.explicit_max_dim > 0)
                 ? opts.explicit_max_dim
-                : MaxSelectableDimForUsbSpeed(usb.ConnectedLinkSpeed());
+                : MaxSelectableDimForUsbSpeed(conn_speed);
 
         std::cout << "[USB] Connected: " << usb.ConnectedDeviceDescription()
                   << " | Locked Max Resolution Edge: " << locked_max_dim << "px\n";
@@ -364,10 +383,25 @@ int main(int argc, char** argv) {
                   << (decoder.IsHardwareAccelerated() ? "D3D11VA Hardware GPU" : "CPU Software Fallback")
                   << ")\n";
 
-        uint64_t decoded_frames = 0;
-        uint64_t window_video_bytes = 0;
+        const uint32_t session_flags =
+            (decoder.IsHardwareAccelerated() ? kStreamFlagHwAccelerated : 0U) |
+            ((opts.res_mode == ResolutionMode::NativeAdaptive) ? kStreamFlagAdaptiveRes : 0U) |
+            ((static_cast<uint32_t>(conn_speed) & 0xFU) << 8);
+
+        uint64_t console_frames = 0;
+        uint64_t console_video_bytes = 0;
+        auto console_timer = std::chrono::steady_clock::now();
+
+        uint64_t fast_frames = 0;
+        uint64_t fast_video_bytes = 0;
+        auto fast_timer = console_timer;
+
         uint32_t latest_kbps = 0;
-        auto stats_timer = std::chrono::steady_clock::now();
+        uint32_t latest_fps_x100 = 6000U;
+        uint32_t ema_dec_us = 0;
+        uint32_t ema_pipe_us = 0;
+        uint32_t decode_drops = 0;
+        bool latency_seeded = false;
         uint32_t last_src_w = 0, last_src_h = 0;
 
         QtSessionConfig qcfg;
@@ -390,14 +424,21 @@ int main(int argc, char** argv) {
             qcfg,
             [&](std::span<const uint8_t> out_pkt) { return usb.SendBulk(out_pkt); },
             [&](const EncodedVideoPacket& vpkt) {
-                window_video_bytes += vpkt.annexb_data.size();
+                auto pkt_t0 = std::chrono::steady_clock::now();
+                producer.AddEncodedVideoBytes(vpkt.annexb_data.size());
+                console_video_bytes += vpkt.annexb_data.size();
+                fast_video_bytes += vpkt.annexb_data.size();
 
-                decoder.DecodeAnnexB(
+                bool dec_ok = decoder.DecodeAnnexB(
                     vpkt.annexb_data,
                     vpkt.pts_ns,
                     vpkt.width,
                     vpkt.height,
                     [&](const DecodedNV12View& view) {
+                        auto dec_t1 = std::chrono::steady_clock::now();
+                        uint32_t cur_dec_us = static_cast<uint32_t>(
+                            std::chrono::duration_cast<std::chrono::microseconds>(dec_t1 - pkt_t0).count());
+
                         uint32_t out_w = 0, out_h = 0;
                         if (opts.res_mode == ResolutionMode::NativeAdaptive) {
                             ClampAdaptiveDimensionsToMax(view.width, view.height, locked_max_dim, out_w, out_h);
@@ -431,6 +472,20 @@ int main(int argc, char** argv) {
                             std::fflush(stdout);
                         }
 
+                        ++console_frames;
+                        ++fast_frames;
+                        auto now = std::chrono::steady_clock::now();
+                        double fast_dt = std::chrono::duration<double>(now - fast_timer).count();
+                        if (fast_dt >= 0.45) {
+                            double inst_fps = static_cast<double>(fast_frames) / fast_dt;
+                            double inst_mbps = (static_cast<double>(fast_video_bytes) * 8.0) / (fast_dt * 1e6);
+                            latest_fps_x100 = static_cast<uint32_t>(inst_fps * 100.0 + 0.5);
+                            latest_kbps = static_cast<uint32_t>(inst_mbps * 1000.0 + 0.5);
+                            fast_frames = 0;
+                            fast_video_bytes = 0;
+                            fast_timer = now;
+                        }
+
                         uint32_t slot = 0;
                         uint8_t* dst_nv12 = producer.AcquireBackbufferSlot(slot);
                         if (dst_nv12) {
@@ -444,38 +499,61 @@ int main(int argc, char** argv) {
                                 dst_nv12,
                                 out_w,
                                 out_h);
+                            auto pipe_t1 = std::chrono::steady_clock::now();
+                            uint32_t cur_pipe_us = static_cast<uint32_t>(
+                                std::chrono::duration_cast<std::chrono::microseconds>(pipe_t1 - pkt_t0).count());
+
+                            if (!latency_seeded) {
+                                ema_dec_us = cur_dec_us;
+                                ema_pipe_us = cur_pipe_us;
+                                latency_seeded = true;
+                            } else {
+                                ema_dec_us = (ema_dec_us * 3U + cur_dec_us) / 4U;
+                                ema_pipe_us = (ema_pipe_us * 3U + cur_pipe_us) / 4U;
+                            }
+
+                            FrameTelemetryMeta meta{};
+                            meta.fps_x100 = latest_fps_x100;
+                            meta.decode_latency_us = ema_dec_us;
+                            meta.pipeline_latency_us = ema_pipe_us;
+                            meta.stream_flags = session_flags;
+                            meta.dropped_frames = decode_drops;
+
                             producer.PublishBackbufferSlot(
-                                slot, out_w, out_h, view.pts_ns, view.width, view.height, latest_kbps);
+                                slot, out_w, out_h, view.pts_ns, view.width, view.height, latest_kbps, meta);
                         }
 
-                        ++decoded_frames;
-                        auto now = std::chrono::steady_clock::now();
-                        double elapsed = std::chrono::duration<double>(now - stats_timer).count();
+                        double elapsed = std::chrono::duration<double>(now - console_timer).count();
                         if (elapsed >= 4.0) {
-                            double fps = static_cast<double>(decoded_frames) / elapsed;
-                            double mbps = (static_cast<double>(window_video_bytes) * 8.0) / (elapsed * 1e6);
-                            latest_kbps = static_cast<uint32_t>(mbps * 1000.0);
+                            double fps = static_cast<double>(console_frames) / elapsed;
+                            double mbps = (static_cast<double>(console_video_bytes) * 8.0) / (elapsed * 1e6);
                             std::printf(
-                                "[Stream] %.1f fps | Bitrate: %.1f Mbps | Output: %ux%u (Source %ux%u) | Audio pkts: %llu\n",
+                                "[Stream] %.1f fps | Bitrate: %.1f Mbps | Decode: %.2f ms (Total %.2f ms) | Output: %ux%u (Source %ux%u) | Audio pkts: %llu\n",
                                 fps,
                                 mbps,
+                                ema_dec_us / 1000.0,
+                                ema_pipe_us / 1000.0,
                                 out_w,
                                 out_h,
                                 last_src_w,
                                 last_src_h,
                                 static_cast<unsigned long long>(session.AudioPacketsReceived()));
                             std::fflush(stdout);
-                            decoded_frames = 0;
-                            window_video_bytes = 0;
-                            stats_timer = now;
+                            console_frames = 0;
+                            console_video_bytes = 0;
+                            console_timer = now;
                         }
                     });
+                if (!dec_ok) {
+                    ++decode_drops;
+                }
             },
             [&](const DecodedPcmPacket& apkt) {
                 size_t stereo_frames = apkt.pcm_s16le.size() / kAudioBytesPerFrame;
                 if (stereo_frames > 0) {
                     producer.PushAudioPcmS16LE(
                         reinterpret_cast<const int16_t*>(apkt.pcm_s16le.data()), stereo_frames);
+                    producer.SetAudioPacketCount(session.AudioPacketsReceived());
                 }
             });
 

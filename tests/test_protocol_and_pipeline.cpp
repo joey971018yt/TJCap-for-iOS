@@ -499,10 +499,108 @@ bool TestPreviewDownscaleAndFullResScreenshotPipeline() {
     return true;
 }
 
+bool TestStreamHealthTelemetryAndGrading() {
+    ASSERT_TRUE(sizeof(VideoSlotHeader) == 64U, "VideoSlotHeader must remain 64 bytes");
+
+    // 1. Deterministic health grade classifier checks
+    StreamHealthSnapshot s_idle{};
+    ASSERT_TRUE(EvaluateStreamHealthGrade(s_idle) == StreamHealthGrade::Idle, "Inactive stream must be Idle");
+
+    StreamHealthSnapshot s_wait{};
+    s_wait.active = true;
+    s_wait.waiting_first_frame = true;
+    ASSERT_TRUE(EvaluateStreamHealthGrade(s_wait) == StreamHealthGrade::WaitingStream,
+                "Waiting for first frame must grade as WaitingStream");
+
+    StreamHealthSnapshot s_exc{};
+    s_exc.active = true;
+    s_exc.fps = 59.9;
+    s_exc.bitrate_mbps = 28.4;
+    s_exc.decode_latency_ms = 1.1;
+    s_exc.pipeline_latency_ms = 1.6;
+    s_exc.hw_accelerated = true;
+    ASSERT_TRUE(EvaluateStreamHealthGrade(s_exc) == StreamHealthGrade::Excellent,
+                "60fps 28.4Mbps 1.6ms D3D11VA stream must grade as Excellent");
+
+    StreamHealthSnapshot s_vfr = s_exc;
+    s_vfr.fps = 5.0;
+    s_vfr.bitrate_mbps = 0.35;
+    s_vfr.pipeline_latency_ms = 1.2;
+    ASSERT_TRUE(EvaluateStreamHealthGrade(s_vfr) == StreamHealthGrade::StaticVfr,
+                "Low-FPS low-bitrate fast-decode iOS untouched screen must grade as StaticVfr, not Warning");
+
+    StreamHealthSnapshot s_cpu_lag = s_exc;
+    s_cpu_lag.decode_latency_ms = 14.5;
+    s_cpu_lag.pipeline_latency_ms = 16.9;
+    s_cpu_lag.hw_accelerated = false;
+    ASSERT_TRUE(EvaluateStreamHealthGrade(s_cpu_lag) == StreamHealthGrade::Warning,
+                "Over-budget >14ms pipeline latency must trigger Warning grade");
+
+    StreamHealthSnapshot s_bw_drop = s_exc;
+    s_bw_drop.fps = 14.0;
+    s_bw_drop.bitrate_mbps = 12.0;
+    ASSERT_TRUE(EvaluateStreamHealthGrade(s_bw_drop) == StreamHealthGrade::Warning,
+                "High motion bitrate with <22fps drop must trigger Warning grade");
+
+    // 2. End-to-end lock-free IPC telemetry roundtrip
+#ifdef _WIN32
+    int pid = _getpid();
+#else
+    int pid = static_cast<int>(getpid());
+#endif
+    std::string test_shm = "IosUsbVcamTelemetryTest_" + std::to_string(pid);
+
+    SharedCaptureProducer producer;
+    ASSERT_TRUE(producer.Open(test_shm), "Failed to open producer for telemetry test");
+    producer.TouchHeartbeat(false);
+
+    SharedCaptureConsumer consumer;
+    ASSERT_TRUE(consumer.Open(test_shm), "Failed to open consumer for telemetry test");
+
+    StreamHealthSnapshot snap{};
+    ASSERT_TRUE(consumer.ReadStreamHealth(snap), "ReadStreamHealth should return true while host heartbeat is alive");
+    ASSERT_TRUE(snap.active && snap.waiting_first_frame && snap.grade == StreamHealthGrade::WaitingStream,
+                "Before first video frame, ReadStreamHealth should report WaitingStream");
+
+    const uint32_t kW = 2868, kH = 1320;
+    std::vector<uint8_t> nv12(static_cast<size_t>(kW) * kH * 3ULL / 2ULL, 128);
+    producer.AddEncodedVideoBytes(1420000ULL);
+    producer.SetAudioPacketCount(420ULL);
+
+    FrameTelemetryMeta meta{};
+    meta.fps_x100 = 5994U;
+    meta.decode_latency_us = 1150U;
+    meta.pipeline_latency_us = 1680U;
+    meta.stream_flags =
+        kStreamFlagHwAccelerated | kStreamFlagAdaptiveRes | (static_cast<uint32_t>(UsbLinkSpeed::Super_5Gbps) << 8);
+    meta.dropped_frames = 0U;
+
+    producer.PublishNV12Frame(nv12.data(), kW, kH, 16666667ULL, kW, kH, 28400U, meta);
+
+    ASSERT_TRUE(consumer.ReadStreamHealth(snap), "ReadStreamHealth should succeed on active 2K+ stream");
+    ASSERT_TRUE(snap.active && !snap.waiting_first_frame, "Snapshot must be active streaming");
+    ASSERT_TRUE(snap.fps > 59.8 && snap.fps < 60.1, "Snapshot FPS mismatch");
+    ASSERT_TRUE(snap.bitrate_mbps > 28.3 && snap.bitrate_mbps < 28.5, "Snapshot Mbps mismatch");
+    ASSERT_TRUE(snap.peak_bitrate_mbps >= 28.4, "Snapshot peak Mbps mismatch");
+    ASSERT_TRUE(snap.decode_latency_ms > 1.14 && snap.decode_latency_ms < 1.16, "Decode latency ms mismatch");
+    ASSERT_TRUE(snap.pipeline_latency_ms > 1.67 && snap.pipeline_latency_ms < 1.69, "Pipeline latency ms mismatch");
+    ASSERT_TRUE(snap.hw_accelerated && snap.adaptive_res && !snap.mock_source, "Stream flags mismatch");
+    ASSERT_TRUE(snap.usb_speed_code == static_cast<uint8_t>(UsbLinkSpeed::Super_5Gbps), "USB speed code mismatch");
+    ASSERT_TRUE(snap.total_video_bytes == 1420000ULL && snap.total_audio_packets == 420ULL,
+                "Cumulative byte/audio counters mismatch");
+    ASSERT_TRUE(snap.grade == StreamHealthGrade::Excellent, "Active 2K+60fps stream grade must be Excellent");
+
+    producer.Close();
+    ASSERT_TRUE(!consumer.ReadStreamHealth(snap) && !snap.active && snap.grade == StreamHealthGrade::Idle,
+                "After producer Close(), ReadStreamHealth must reset cleanly to Idle");
+    consumer.Close();
+    return true;
+}
+
 }  // namespace
 
 int main() {
-    std::cout << "[JCast for iOS] Running protocol, USB speed gating, updater, preview & 2K+ screenshot unit tests...\n";
+    std::cout << "[JCast for iOS] Running protocol, USB speed, updater, preview, screenshot & health telemetry tests...\n";
     if (!TestExactQuickTimeHexVectors()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestExactQuickTimeHexVectors\n";
     if (!TestSpsResolutionAndAvccConversion()) return EXIT_FAILURE;
@@ -517,6 +615,8 @@ int main() {
     std::cout << "  [PASS] TestGitHubReleasesJsonAndSemVerUpdater\n";
     if (!TestPreviewDownscaleAndFullResScreenshotPipeline()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestPreviewDownscaleAndFullResScreenshotPipeline\n";
+    if (!TestStreamHealthTelemetryAndGrading()) return EXIT_FAILURE;
+    std::cout << "  [PASS] TestStreamHealthTelemetryAndGrading\n";
     std::cout << "[JCast for iOS] All tests passed successfully!\n";
     return EXIT_SUCCESS;
 }

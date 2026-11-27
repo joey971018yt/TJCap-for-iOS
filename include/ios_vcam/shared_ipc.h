@@ -75,6 +75,58 @@ inline constexpr uint64_t kAudioRingMask = kAudioRingFrames - 1ULL;
 
 inline constexpr const char* kDefaultShmName = "IosUsbVcamSharedMemV2";
 
+// Bitflags for VideoSlotHeader::stream_flags
+inline constexpr uint32_t kStreamFlagHwAccelerated = 1U << 0;
+inline constexpr uint32_t kStreamFlagMockSource    = 1U << 1;
+inline constexpr uint32_t kStreamFlagAdaptiveRes   = 1U << 2;
+// Bits 8..11 encode static_cast<uint32_t>(UsbLinkSpeed) & 0xFU
+
+enum class StreamHealthGrade : uint8_t {
+    Idle = 0,           // Capture host not running
+    WaitingStream = 1,  // Host running, waiting for iPhone/iPad frames
+    Excellent = 2,      // Smooth low-latency streaming
+    StaticVfr = 3,      // Normal iOS VFR power-saving on untouched static screen
+    Warning = 4,        // High decode latency (>14ms) or bandwidth/frame drop bottleneck
+};
+
+struct FrameTelemetryMeta {
+    uint32_t fps_x100 = 0;
+    uint32_t decode_latency_us = 0;
+    uint32_t pipeline_latency_us = 0;
+    uint32_t stream_flags = 0;
+    uint32_t dropped_frames = 0;
+};
+
+struct StreamHealthSnapshot {
+    bool active = false;
+    bool waiting_first_frame = false;
+    StreamHealthGrade grade = StreamHealthGrade::Idle;
+
+    double fps = 0.0;
+    double bitrate_mbps = 0.0;
+    double peak_bitrate_mbps = 0.0;
+    double decode_latency_ms = 0.0;
+    double pipeline_latency_ms = 0.0;
+
+    uint32_t frame_width = 0;
+    uint32_t frame_height = 0;
+    uint32_t source_width = 0;
+    uint32_t source_height = 0;
+
+    uint64_t total_frames = 0;
+    uint64_t total_video_bytes = 0;
+    uint64_t total_audio_packets = 0;
+    uint32_t dropped_frames = 0;
+    uint64_t last_frame_age_ms = 0;
+
+    bool hw_accelerated = false;
+    bool mock_source = false;
+    bool adaptive_res = false;
+    uint8_t usb_speed_code = 0;
+};
+
+StreamHealthGrade EvaluateStreamHealthGrade(const StreamHealthSnapshot& s);
+
 struct alignas(64) VideoSlotHeader {
     uint64_t frame_seq = 0;
     uint64_t pts_ns = 0;
@@ -83,7 +135,14 @@ struct alignas(64) VideoSlotHeader {
     uint32_t source_width = kDefaultCanvasWidth;
     uint32_t source_height = kDefaultCanvasHeight;
     uint32_t bitrate_kbps = 0;
+    uint32_t fps_x100 = 0;
+    uint32_t decode_latency_us = 0;
+    uint32_t pipeline_latency_us = 0;
+    uint32_t stream_flags = 0;
+    uint32_t dropped_frames = 0;
+    uint64_t publish_mono_ms = 0;
 };
+static_assert(sizeof(VideoSlotHeader) == 64, "VideoSlotHeader must remain 64 bytes for IPC ABI compatibility");
 
 struct alignas(64) SharedCaptureLayout {
     uint32_t magic = 0;
@@ -96,9 +155,14 @@ struct alignas(64) SharedCaptureLayout {
     std::atomic<uint32_t> active_width{2560U};
     std::atomic<uint32_t> active_height{1440U};
 
-    // Triple-buffered lock-free video state
+    // Triple-buffered lock-free video state + real-time telemetry counters (fits inside first 64B header cacheline)
     std::atomic<uint32_t> latest_video_slot{0};
     std::atomic<uint64_t> total_video_frames{0};
+    std::atomic<uint64_t> total_video_bytes{0};
+    std::atomic<uint64_t> total_audio_packets{0};
+    std::atomic<uint32_t> live_bitrate_kbps{0};
+    std::atomic<uint32_t> live_fps_x100{0};
+
     VideoSlotHeader slot_headers[kVideoSlotCount];
     alignas(64) uint8_t video_slots[kVideoSlotCount][kMaxNv12FrameBytes];
 
@@ -122,6 +186,8 @@ public:
     bool IsOpen() const { return layout_ != nullptr; }
 
     void SetAdvertisedDimensions(uint32_t width, uint32_t height);
+    void AddEncodedVideoBytes(uint64_t byte_count);
+    void SetAudioPacketCount(uint64_t packet_count);
 
     // Direct write access to next backbuffer slot (capacity = kMaxNv12FrameBytes)
     uint8_t* AcquireBackbufferSlot(uint32_t& out_slot_index);
@@ -132,7 +198,8 @@ public:
         uint64_t pts_ns,
         uint32_t src_width,
         uint32_t src_height,
-        uint32_t bitrate_kbps = 0);
+        uint32_t bitrate_kbps = 0,
+        const FrameTelemetryMeta& meta = {});
 
     // Convenience helper when NV12 is already in a contiguous buffer of size (frame_width * frame_height * 3 / 2)
     void PublishNV12Frame(
@@ -142,7 +209,8 @@ public:
         uint64_t pts_ns,
         uint32_t src_width = 0,
         uint32_t src_height = 0,
-        uint32_t bitrate_kbps = 0);
+        uint32_t bitrate_kbps = 0,
+        const FrameTelemetryMeta& meta = {});
 
     // Writes 48kHz 16-bit stereo LPCM frames into the SPMC ring buffer
     void PushAudioPcmS16LE(const int16_t* stereo_samples, size_t stereo_frame_count);
@@ -210,12 +278,22 @@ public:
         uint32_t& out_width,
         uint32_t& out_height);
 
+    // Reads real-time FPS, Mbps bitrate, peak Mbps, decode/pipeline ms latency, and health grade in O(1) without touching pixel buffers
+    bool ReadStreamHealth(StreamHealthSnapshot& out_snapshot);
+
     size_t ReadAudioPcmS16LE(int16_t* out_stereo_samples, size_t requested_stereo_frames);
 
 private:
     SharedCaptureLayout* layout_ = nullptr;
     uint64_t audio_read_cursor_ = 0;
     bool audio_cursor_initialized_ = false;
+
+    uint64_t telem_prev_mono_ms_ = 0;
+    uint64_t telem_prev_frames_ = 0;
+    uint64_t telem_prev_bytes_ = 0;
+    double telem_ema_fps_ = 0.0;
+    double telem_ema_mbps_ = 0.0;
+    double telem_peak_mbps_ = 0.0;
 #ifdef _WIN32
     void* mapping_handle_ = nullptr;
 #else
