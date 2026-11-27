@@ -38,3 +38,13 @@
 ## 三、完整移除方式
 
 開啟 `ios_vcam_gui.exe` 點擊 **`🗑 完整移除`** 按鈕（或執行 `dist-win64\uninstall_all_admin.ps1`），即可一鍵移除 Apple 複合裝置上的 `libusb0` UpperFilter 並反註冊 DirectShow 虛擬視訊與音訊擷取卡。
+
+---
+
+## 四、版本更新日誌 (Changelog)
+
+完整歷史紀錄請參閱 **[CHANGELOG.md](CHANGELOG.md)**：
+
+* **`v1.2.0` (2026-11-26)**：新增 **2K+ 裝置原生解析度與真實比例自適應**（iPhone `19.5:9` 最高 `2868×1320`、iPad `4:3` 最高 `2752×2064` @ 60fps 滿版無黑邊）、控制台 4 段畫質比例切換，以及即時 `Mbps` 碼率監控。
+* **`v1.1.0` (2026-11-26)**：新增 **Windows 原生一鍵智慧圖形化控制台 (`ios_vcam_gui.exe`)**、電腦耳機零延遲音訊監聽選單、自動解除 ZIP 下載封鎖，並全面改用微軟官方 Visual Studio (`MSVC`) 原生編譯消除防毒誤報。
+* **`v1.0.0` (2026-11-26)**：初版發布，實作 Apple QuickTime / Valeria (`SubClass 0x2A`) 有線鏡像協定、免測試模式安全 `libusb0` UpperFilter 掛載器、`D3D11VA` 硬體解碼與雙路 DirectShow 視訊＋音訊虛擬擷取卡。

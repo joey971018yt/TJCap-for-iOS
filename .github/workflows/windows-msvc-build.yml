@@ -34,6 +34,7 @@ jobs:
           Copy-Item "scripts\install_all_admin.ps1" "release-msvc-win64\"
           Copy-Item "scripts\uninstall_all_admin.ps1" "release-msvc-win64\"
           Copy-Item "README.md" "release-msvc-win64\"
+          Copy-Item "CHANGELOG.md" "release-msvc-win64\"
           if (Test-Path "dist-win64\libusb-1.0.dll") {
             Copy-Item "dist-win64\libusb-1.0.dll" "release-msvc-win64\"
           }
