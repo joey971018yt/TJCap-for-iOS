@@ -6,6 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-msvc-win64:
     runs-on: windows-latest
@@ -77,3 +80,32 @@ jobs:
             release-msvc-win64/
             build-installer/iOS-USB-Capture-Setup-v1.3.0.exe
             build-installer/iOS-USB-Capture-Portable-v1.3.0.zip
+
+      - name: Publish App Setup.exe & Portable.zip to GitHub Release v1.3.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $notes = @"
+          ## 📦 Windows 10 / 11 正式版 App 下載
+
+          1. **推薦下載：`iOS-USB-Capture-Setup-v1.3.0.exe`（正式安裝版 App）**
+             - 雙擊一鍵安裝，自動在**桌面**與**開始選單**建立帶有專屬高解析度圖示的 **「iOS USB 擷取卡」** App。
+             - 安裝過程自動註冊 DirectShow 2K+ 視訊/音訊虛擬擷取卡與微軟 WHQL 簽章 `libusb0` 過濾驅動服務。
+             - 支援從 Windows「設定 ➔ 應用程式」一鍵乾淨解除安裝。
+          2. **免安裝選擇：`iOS-USB-Capture-Portable-v1.3.0.zip`（綠色便攜版 App）**
+             - 解壓縮後直接雙擊資料夾內帶專屬圖示的 **`iOS USB Capture.exe`** 即可使用。
+          "@
+          gh release view v1.3.0 >$null 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload v1.3.0 `
+              "build-installer\iOS-USB-Capture-Setup-v1.3.0.exe" `
+              "build-installer\iOS-USB-Capture-Portable-v1.3.0.zip" `
+              --clobber
+          } else {
+            gh release create v1.3.0 `
+              "build-installer\iOS-USB-Capture-Setup-v1.3.0.exe" `
+              "build-installer\iOS-USB-Capture-Portable-v1.3.0.zip" `
+              --title "iOS USB 擷取卡 App v1.3.0 (正式安裝包 + 專屬圖示 + 2K+ 自適應)" `
+              --notes $notes
+          }
