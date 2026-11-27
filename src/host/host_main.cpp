@@ -46,10 +46,10 @@ void SignalHandler(int) {
 #endif
 
 enum class ResolutionMode {
-    Native2KPlus,  // HPD1 3840x3840 -> exact device native pixels & aspect ratio (zero black bars)
-    Native1080,    // HPD1 1920x1920 -> 1080p-tier exact device aspect ratio (zero black bars)
-    Fixed1440p,    // HPD1 2560x2560 -> letterboxed into 2560x1440 (16:9 2K QHD)
-    Fixed1080p,    // HPD1 1920x1920 -> letterboxed into 1920x1080 (16:9 FHD)
+    NativeAdaptive,  // Device-native aspect ratio clamped to session max_dim (zero black bars)
+    Fixed1440p,      // Fixed 2560x1440 (16:9 2K QHD) letterboxed canvas
+    Fixed1080p,      // Fixed 1920x1080 (16:9 FHD) letterboxed canvas
+    Fixed720p,       // Fixed 1280x720  (16:9 HD)  letterboxed canvas
 };
 
 struct HostOptions {
@@ -58,7 +58,8 @@ struct HostOptions {
     bool prefer_hw_decode = true;
     bool enable_audio_route = true;
     bool list_audio_only = false;
-    ResolutionMode res_mode = ResolutionMode::Native2KPlus;
+    ResolutionMode res_mode = ResolutionMode::NativeAdaptive;
+    uint32_t explicit_max_dim = 0;  // 0 = determine once from USB port speed before session starts
     std::string preferred_udid;
     std::string audio_out_match;
     std::string stop_event_name;
@@ -66,15 +67,17 @@ struct HostOptions {
 
 void PrintUsage() {
     std::cout
-        << "iOS USB Universal Virtual Capture Card Host (ios_vcam_host.exe)\n"
+        << "JCast for iOS — Core Capture Host (ios_vcam_host.exe)\n"
         << "Usage: ios_vcam_host.exe [options]\n\n"
         << "Options:\n"
         << "  --res <mode>           Resolution & aspect mode (default: native):\n"
-        << "                           native     : 2K+ device-native resolution & aspect ratio (zero black bars)\n"
-        << "                           native1080 : 1080p-class device-native aspect ratio (zero black bars)\n"
+        << "                           native     : Device-native aspect ratio (zero black bars)\n"
+        << "                           native1080 : 1080p-capped device-native aspect ratio\n"
         << "                           1440p      : Fixed 2560x1440 (2K 16:9) letterboxed canvas\n"
         << "                           1080p      : Fixed 1920x1080 (FHD 16:9) letterboxed canvas\n"
-        << "  --mock                 Run self-test pipeline (2560x1440@60fps color bars + 48kHz stereo tone)\n"
+        << "                           720p       : Fixed 1280x720  (HD 16:9) letterboxed canvas\n"
+        << "  --max-dim <px>         Lock max transmission long-edge (960 / 1280 / 1920 / 2560 / 3840)\n"
+        << "  --mock                 Run self-test pipeline (color bars + 48kHz stereo tone)\n"
         << "  --mode <valeria|clean> Status bar mode: 'valeria' (9:41 clean bar, default) or 'clean' (real bar)\n"
         << "  --udid <serial>        Connect to a specific iPhone/iPad serial/UDID substring\n"
         << "  --audio-out <name>     Route 48kHz audio via WASAPI to endpoint matching <name>\n"
@@ -96,13 +99,21 @@ bool ParseArgs(int argc, char** argv, HostOptions& opts) {
         } else if (arg == "--res" && i + 1 < argc) {
             std::string r = argv[++i];
             if (r == "native1080") {
-                opts.res_mode = ResolutionMode::Native1080;
+                opts.res_mode = ResolutionMode::NativeAdaptive;
+                if (opts.explicit_max_dim == 0) opts.explicit_max_dim = 1920U;
             } else if (r == "1440p" || r == "2k") {
                 opts.res_mode = ResolutionMode::Fixed1440p;
             } else if (r == "1080p" || r == "fhd") {
                 opts.res_mode = ResolutionMode::Fixed1080p;
+            } else if (r == "720p" || r == "hd") {
+                opts.res_mode = ResolutionMode::Fixed720p;
             } else {
-                opts.res_mode = ResolutionMode::Native2KPlus;
+                opts.res_mode = ResolutionMode::NativeAdaptive;
+            }
+        } else if (arg == "--max-dim" && i + 1 < argc) {
+            int v = std::atoi(argv[++i]);
+            if (v >= 320 && v <= 3840) {
+                opts.explicit_max_dim = static_cast<uint32_t>(v);
             }
         } else if (arg == "--mode" && i + 1 < argc) {
             std::string m = argv[++i];
@@ -124,16 +135,21 @@ bool ParseArgs(int argc, char** argv, HostOptions& opts) {
     return true;
 }
 
-int RunMockPipeline(SharedCaptureProducer& producer, ResolutionMode res_mode) {
-    uint32_t mock_w = (res_mode == ResolutionMode::Fixed1080p || res_mode == ResolutionMode::Native1080)
-                          ? 1920U
-                          : 2560U;
-    uint32_t mock_h = (mock_w == 2560U) ? 1440U : 1080U;
+int RunMockPipeline(SharedCaptureProducer& producer, const HostOptions& opts) {
+    uint32_t mock_w = 2560U, mock_h = 1440U;
+    if (opts.res_mode == ResolutionMode::Fixed720p || (opts.explicit_max_dim > 0 && opts.explicit_max_dim <= 1280U)) {
+        mock_w = 1280U;
+        mock_h = 720U;
+    } else if (opts.res_mode == ResolutionMode::Fixed1080p ||
+               (opts.explicit_max_dim > 0 && opts.explicit_max_dim <= 1920U)) {
+        mock_w = 1920U;
+        mock_h = 1080U;
+    }
     producer.SetAdvertisedDimensions(mock_w, mock_h);
 
     std::cout << "[Host] Starting --mock self-test generator (" << mock_w << "x" << mock_h
               << "@60fps NV12 + 48kHz Stereo LPCM)...\n"
-              << "[Host] Open OBS / Discord / Zoom and select 'iOS USB Capture Card (Video)'!\n"
+              << "[Host] Open OBS / Discord / Zoom and select 'JCast for iOS (Video)'!\n"
               << "[Host] Press Ctrl+C to stop.\n";
 
     constexpr uint64_t kFrameIntervalNs = 16666667ULL;  // 60.00 fps
@@ -253,7 +269,10 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    if (opts.res_mode == ResolutionMode::Fixed1080p) {
+    if (opts.res_mode == ResolutionMode::Fixed720p || (opts.explicit_max_dim > 0 && opts.explicit_max_dim <= 1280U)) {
+        producer.SetAdvertisedDimensions(1280, 720);
+    } else if (opts.res_mode == ResolutionMode::Fixed1080p ||
+               (opts.explicit_max_dim > 0 && opts.explicit_max_dim <= 1920U)) {
         producer.SetAdvertisedDimensions(1920, 1080);
     } else {
         producer.SetAdvertisedDimensions(2560, 1440);
@@ -267,12 +286,12 @@ int main(int argc, char** argv) {
         } else if (!opts.audio_out_match.empty()) {
             std::cerr << "[Audio] Warning: No playback endpoint matched \"" << opts.audio_out_match << "\".\n";
         } else {
-            std::cout << "[Audio] DirectShow 'iOS USB Capture Card (Audio)' active (48kHz LPCM).\n";
+            std::cout << "[Audio] DirectShow 'JCast for iOS (Audio)' active (48kHz LPCM).\n";
         }
     }
 
     if (opts.mock_mode) {
-        int rc = RunMockPipeline(producer, opts.res_mode);
+        int rc = RunMockPipeline(producer, opts);
         audio_router.Stop();
         producer.Close();
 #ifdef _WIN32
@@ -293,13 +312,16 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    const char* res_label = "2K+ Native Adaptive";
-    if (opts.res_mode == ResolutionMode::Native1080) res_label = "1080p Native Adaptive";
-    else if (opts.res_mode == ResolutionMode::Fixed1440p) res_label = "Fixed 2K 2560x1440";
+    const char* res_label = "Adaptive Native";
+    if (opts.res_mode == ResolutionMode::Fixed1440p) res_label = "Fixed 2K 2560x1440";
     else if (opts.res_mode == ResolutionMode::Fixed1080p) res_label = "Fixed 1080p 1920x1080";
+    else if (opts.res_mode == ResolutionMode::Fixed720p) res_label = "Fixed 720p 1280x720";
 
-    std::cout << "[Host] Waiting for iPhone / iPad over USB (Resolution: " << res_label
-              << ", Status bar: " << (opts.clean_status_bar ? "clean native" : "QuickTime Valeria") << ")...\n";
+    std::cout << "[Host] Waiting for iPhone / iPad over USB (Mode: " << res_label;
+    if (opts.explicit_max_dim > 0) {
+        std::cout << ", Locked Max Edge: " << opts.explicit_max_dim << "px";
+    }
+    std::cout << ", Status bar: " << (opts.clean_status_bar ? "clean native" : "QuickTime Valeria") << ")...\n";
 
     while (!g_stop_flag.load(std::memory_order_relaxed)) {
         producer.TouchHeartbeat(false);
@@ -320,7 +342,14 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        std::cout << "[USB] Connected: " << usb.ConnectedDeviceDescription() << "\n";
+        // Determine maximum resolution ceiling ONCE at session start (never auto-modified during streaming!)
+        const uint32_t locked_max_dim =
+            (opts.explicit_max_dim > 0)
+                ? opts.explicit_max_dim
+                : MaxSelectableDimForUsbSpeed(usb.ConnectedLinkSpeed());
+
+        std::cout << "[USB] Connected: " << usb.ConnectedDeviceDescription()
+                  << " | Locked Max Resolution Edge: " << locked_max_dim << "px\n";
 
         MfH264Decoder decoder;
         std::string dec_err;
@@ -331,7 +360,7 @@ int main(int argc, char** argv) {
         }
         std::cout << "[Decoder] Windows Media Foundation H.264 MFT initialized ("
                   << (decoder.IsHardwareAccelerated() ? "D3D11VA Hardware GPU" : "CPU Software Fallback")
-                  << ", 2K+ Adaptive Ready)\n";
+                  << ")\n";
 
         uint64_t decoded_frames = 0;
         uint64_t window_video_bytes = 0;
@@ -341,15 +370,18 @@ int main(int argc, char** argv) {
 
         QtSessionConfig qcfg;
         qcfg.valeria_clean_status_bar = !opts.clean_status_bar;
-        if (opts.res_mode == ResolutionMode::Native2KPlus) {
-            qcfg.max_width = 3840;
-            qcfg.max_height = 3840;
-        } else if (opts.res_mode == ResolutionMode::Fixed1440p) {
-            qcfg.max_width = 2560;
-            qcfg.max_height = 2560;
+        if (opts.res_mode == ResolutionMode::Fixed1440p) {
+            qcfg.max_width = std::min<uint32_t>(2560U, locked_max_dim);
+            qcfg.max_height = qcfg.max_width;
+        } else if (opts.res_mode == ResolutionMode::Fixed1080p) {
+            qcfg.max_width = std::min<uint32_t>(1920U, locked_max_dim);
+            qcfg.max_height = qcfg.max_width;
+        } else if (opts.res_mode == ResolutionMode::Fixed720p) {
+            qcfg.max_width = 1280U;
+            qcfg.max_height = 1280U;
         } else {
-            qcfg.max_width = 1920;
-            qcfg.max_height = 1920;
+            qcfg.max_width = locked_max_dim;
+            qcfg.max_height = locked_max_dim;
         }
 
         QtStreamSession session(
@@ -365,12 +397,14 @@ int main(int argc, char** argv) {
                     vpkt.height,
                     [&](const DecodedNV12View& view) {
                         uint32_t out_w = 0, out_h = 0;
-                        if (opts.res_mode == ResolutionMode::Native2KPlus ||
-                            opts.res_mode == ResolutionMode::Native1080) {
-                            AlignAdaptiveDimensions(view.width, view.height, out_w, out_h);
+                        if (opts.res_mode == ResolutionMode::NativeAdaptive) {
+                            ClampAdaptiveDimensionsToMax(view.width, view.height, locked_max_dim, out_w, out_h);
                         } else if (opts.res_mode == ResolutionMode::Fixed1440p) {
                             out_w = 2560U;
                             out_h = 1440U;
+                        } else if (opts.res_mode == ResolutionMode::Fixed720p) {
+                            out_w = 1280U;
+                            out_h = 720U;
                         } else {
                             out_w = 1920U;
                             out_h = 1080U;

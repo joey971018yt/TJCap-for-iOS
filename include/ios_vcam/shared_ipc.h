@@ -42,6 +42,29 @@ inline void AlignAdaptiveDimensions(uint32_t in_w, uint32_t in_h, uint32_t& out_
     out_h = std::max(64U, h & ~1U);
 }
 
+// Clamps source dimensions proportionally so neither width nor height exceeds max_long_edge, then 4x2-aligns
+inline void ClampAdaptiveDimensionsToMax(
+    uint32_t in_w,
+    uint32_t in_h,
+    uint32_t max_long_edge,
+    uint32_t& out_w,
+    uint32_t& out_h) {
+    if (in_w < 64 || in_h < 64) {
+        out_w = kDefaultCanvasWidth;
+        out_h = kDefaultCanvasHeight;
+        return;
+    }
+    uint32_t cap = std::clamp(max_long_edge, 320U, kMaxFrameDimension);
+    uint32_t cur_max = std::max(in_w, in_h);
+    uint32_t scaled_w = in_w;
+    uint32_t scaled_h = in_h;
+    if (cur_max > cap) {
+        scaled_w = static_cast<uint32_t>((static_cast<uint64_t>(in_w) * cap + cur_max / 2U) / cur_max);
+        scaled_h = static_cast<uint32_t>((static_cast<uint64_t>(in_h) * cap + cur_max / 2U) / cur_max);
+    }
+    AlignAdaptiveDimensions(scaled_w, scaled_h, out_w, out_h);
+}
+
 // 48000 Hz, 16-bit signed stereo (4 bytes per stereo sample frame)
 inline constexpr uint32_t kAudioSampleRate = 48000U;
 inline constexpr uint32_t kAudioChannels = 2U;

@@ -15,7 +15,6 @@ namespace ios_vcam {
 #ifdef _WIN32
 namespace {
 
-// Minimal ABI-exact libusb-1.0 C declarations for runtime dynamic loading (Windows x64)
 #define LIBUSB_CALL WINAPI
 
 struct libusb_context;
@@ -95,6 +94,7 @@ struct LibUsbApi {
     SSIZE_T(LIBUSB_CALL* get_device_list)(libusb_context*, libusb_device***) = nullptr;
     void(LIBUSB_CALL* free_device_list)(libusb_device**, int) = nullptr;
     int(LIBUSB_CALL* get_device_descriptor)(libusb_device*, libusb_device_descriptor*) = nullptr;
+    int(LIBUSB_CALL* get_device_speed)(libusb_device*) = nullptr;
     int(LIBUSB_CALL* get_config_descriptor)(libusb_device*, uint8_t, libusb_config_descriptor**) = nullptr;
     void(LIBUSB_CALL* free_config_descriptor)(libusb_config_descriptor*) = nullptr;
     int(LIBUSB_CALL* open)(libusb_device*, libusb_device_handle**) = nullptr;
@@ -122,8 +122,19 @@ constexpr uint8_t kEndpointTransferBulk = 0x02;
 constexpr uint8_t kEndpointDirIn = 0x80;
 
 bool IsIosProductId(uint16_t pid) {
-    // Standard iPhone / iPad / iPod Touch USB PIDs: 0x1290..0x12AF
     return (pid >= 0x1290 && pid <= 0x12AF);
+}
+
+UsbLinkSpeed ConvertRawLibUsbSpeed(int raw_speed, uint16_t bcd_usb) {
+    if (raw_speed >= 1 && raw_speed <= 6) {
+        return static_cast<UsbLinkSpeed>(raw_speed);
+    }
+    // Fallback heuristic from negotiated USB descriptor version if hub speed query returned 0
+    if (bcd_usb >= 0x0310) return UsbLinkSpeed::SuperPlus_10Gbps;
+    if (bcd_usb >= 0x0300) return UsbLinkSpeed::Super_5Gbps;
+    if (bcd_usb >= 0x0200) return UsbLinkSpeed::High_480Mbps;
+    if (bcd_usb >= 0x0110) return UsbLinkSpeed::Full_12Mbps;
+    return UsbLinkSpeed::Unknown;
 }
 
 struct QtInterfaceMatch {
@@ -216,6 +227,67 @@ UsbIosTransport::~UsbIosTransport() {
     delete impl_;
 }
 
+UsbLinkSpeed UsbIosTransport::ProbeConnectedIosLinkSpeed(uint16_t* out_bcd_usb) {
+    if (out_bcd_usb) *out_bcd_usb = 0;
+#ifdef _WIN32
+    wchar_t exe_buf[MAX_PATH * 2] = {0};
+    GetModuleFileNameW(nullptr, exe_buf, MAX_PATH * 2 - 1);
+    std::wstring dll_path(exe_buf);
+    size_t slash = dll_path.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) {
+        dll_path = dll_path.substr(0, slash + 1) + L"libusb-1.0.dll";
+    } else {
+        dll_path = L"libusb-1.0.dll";
+    }
+
+    HMODULE dll = LoadLibraryW(dll_path.c_str());
+    if (!dll) {
+        dll = LoadLibraryW(L"libusb-1.0.dll");
+    }
+    if (!dll) {
+        return UsbLinkSpeed::Unknown;
+    }
+
+    auto fn_init = reinterpret_cast<int(LIBUSB_CALL*)(libusb_context**)>(GetProcAddress(dll, "libusb_init"));
+    auto fn_exit = reinterpret_cast<void(LIBUSB_CALL*)(libusb_context*)>(GetProcAddress(dll, "libusb_exit"));
+    auto fn_list = reinterpret_cast<SSIZE_T(LIBUSB_CALL*)(libusb_context*, libusb_device***)>(
+        GetProcAddress(dll, "libusb_get_device_list"));
+    auto fn_free = reinterpret_cast<void(LIBUSB_CALL*)(libusb_device**, int)>(
+        GetProcAddress(dll, "libusb_free_device_list"));
+    auto fn_desc = reinterpret_cast<int(LIBUSB_CALL*)(libusb_device*, libusb_device_descriptor*)>(
+        GetProcAddress(dll, "libusb_get_device_descriptor"));
+    auto fn_speed = reinterpret_cast<int(LIBUSB_CALL*)(libusb_device*)>(
+        GetProcAddress(dll, "libusb_get_device_speed"));
+
+    UsbLinkSpeed detected = UsbLinkSpeed::Unknown;
+    if (fn_init && fn_exit && fn_list && fn_free && fn_desc) {
+        libusb_context* ctx = nullptr;
+        if (fn_init(&ctx) == 0 && ctx) {
+            libusb_device** list = nullptr;
+            SSIZE_T count = fn_list(ctx, &list);
+            if (count > 0 && list) {
+                for (SSIZE_T i = 0; i < count; ++i) {
+                    libusb_device_descriptor desc{};
+                    if (fn_desc(list[i], &desc) == 0 &&
+                        desc.idVendor == kAppleVendorId && IsIosProductId(desc.idProduct)) {
+                        int raw_spd = fn_speed ? fn_speed(list[i]) : 0;
+                        detected = ConvertRawLibUsbSpeed(raw_spd, desc.bcdUSB);
+                        if (out_bcd_usb) *out_bcd_usb = desc.bcdUSB;
+                        break;
+                    }
+                }
+                fn_free(list, 1);
+            }
+            fn_exit(ctx);
+        }
+    }
+    FreeLibrary(dll);
+    return detected;
+#else
+    return UsbLinkSpeed::Unknown;
+#endif
+}
+
 bool UsbIosTransport::Initialize(std::string* out_error) {
 #ifdef _WIN32
     if (impl_->ctx != nullptr) {
@@ -255,6 +327,8 @@ bool UsbIosTransport::Initialize(std::string* out_error) {
     LOAD_SYM(control_transfer, "libusb_control_transfer");
     LOAD_SYM(bulk_transfer, "libusb_bulk_transfer");
     LOAD_SYM(get_string_descriptor_ascii, "libusb_get_string_descriptor_ascii");
+    impl_->api.get_device_speed = reinterpret_cast<decltype(impl_->api.get_device_speed)>(
+        GetProcAddress(dll, "libusb_get_device_speed"));
     impl_->api.strerror = reinterpret_cast<decltype(impl_->api.strerror)>(
         GetProcAddress(dll, "libusb_strerror"));
 #undef LOAD_SYM
@@ -307,6 +381,9 @@ bool UsbIosTransport::OpenAndClaimQuickTimeInterface(const UsbTransportConfig& c
             }
             found_any_ios = true;
 
+            int raw_spd = impl_->api.get_device_speed ? impl_->api.get_device_speed(dev) : 0;
+            UsbLinkSpeed dev_speed = ConvertRawLibUsbSpeed(raw_spd, desc.bcdUSB);
+
             libusb_device_handle* h = nullptr;
             if (impl_->api.open(dev, &h) != 0 || !h) {
                 if (out_error && out_error->empty()) {
@@ -338,8 +415,6 @@ bool UsbIosTransport::OpenAndClaimQuickTimeInterface(const UsbTransportConfig& c
             auto match = InspectDeviceConfigs(impl_->api, dev, desc);
             if (!match.found_qt) {
                 if (!sent_hidden_config_request) {
-                    // Send Apple QuickTime hidden USB configuration vendor request:
-                    // bmRequestType = 0x40 (Host-to-Device | Vendor | Device), bRequest = 0x52, wValue = 0x0000, wIndex = 0x0002
                     unsigned char dummy[4] = {0};
                     impl_->api.control_transfer(h, 0x40, 0x52, 0x0000, 0x0002, dummy, 0, 1000);
                     sent_hidden_config_request = true;
@@ -348,7 +423,6 @@ bool UsbIosTransport::OpenAndClaimQuickTimeInterface(const UsbTransportConfig& c
                 continue;
             }
 
-            // Activate the composite USBMux + QuickTime AV configuration if not yet selected
             int current_cfg = -1;
             if (impl_->api.get_configuration(h, &current_cfg) != 0 || current_cfg != match.qt_config_value) {
                 int set_rc = impl_->api.set_configuration(h, match.qt_config_value);
@@ -381,19 +455,17 @@ bool UsbIosTransport::OpenAndClaimQuickTimeInterface(const UsbTransportConfig& c
             impl_->usbmux_config_value = match.usbmux_config_value;
             impl_->bulk_in_ep = match.bulk_in_ep;
             impl_->bulk_out_ep = match.bulk_out_ep;
+            connected_speed_ = dev_speed;
 
-            char info[256];
+            char info[320];
             std::snprintf(
                 info,
                 sizeof(info),
-                "%s (PID=0x%04X, Serial=%s, Cfg=%d, If=%d, IN=0x%02X, OUT=0x%02X)",
+                "%s | %s | PID=0x%04X, Serial=%s",
                 prod_str.c_str(),
+                UsbLinkSpeedName(dev_speed),
                 desc.idProduct,
-                serial_str.empty() ? "N/A" : serial_str.c_str(),
-                match.qt_config_value,
-                match.qt_interface_number,
-                match.bulk_in_ep,
-                match.bulk_out_ep);
+                serial_str.empty() ? "N/A" : serial_str.c_str());
             device_desc_ = info;
 
             impl_->api.free_device_list(list, 1);
@@ -409,7 +481,6 @@ bool UsbIosTransport::OpenAndClaimQuickTimeInterface(const UsbTransportConfig& c
             return false;
         }
 
-        // Wait for iOS device USB re-enumeration after hidden config control request
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
     }
 
@@ -464,7 +535,6 @@ bool UsbIosTransport::RunBulkReadLoop(
     constexpr int kReadBufSize = 256 * 1024;
     std::vector<unsigned char> buf(kReadBufSize);
 
-    // LIBUSB_ERROR_TIMEOUT = -7, LIBUSB_ERROR_OVERFLOW = -8
     while (!stop_flag.load(std::memory_order_relaxed)) {
         int transferred = 0;
         int rc = impl_->api.bulk_transfer(
@@ -508,7 +578,6 @@ void UsbIosTransport::CloseAndRestoreUsbMux() {
         impl_->api.release_interface(impl_->handle, impl_->claimed_interface);
         impl_->claimed_interface = -1;
     }
-    // Disable hidden QuickTime config (wIndex = 0x0000) and switch back to standard USBMux config
     unsigned char dummy[4] = {0};
     impl_->api.control_transfer(impl_->handle, 0x40, 0x52, 0x0000, 0x0000, dummy, 0, 500);
     impl_->api.set_configuration(impl_->handle, impl_->usbmux_config_value);
@@ -516,6 +585,7 @@ void UsbIosTransport::CloseAndRestoreUsbMux() {
     impl_->api.close(impl_->handle);
     impl_->handle = nullptr;
     device_desc_.clear();
+    connected_speed_ = UsbLinkSpeed::Unknown;
 #endif
 }
 

@@ -20,13 +20,13 @@ BEGIN
     BEGIN
         BLOCK "040404b0"
         BEGIN
-            VALUE "CompanyName", "iOS USB Capture Project"
-            VALUE "FileDescription", "iOS USB Capture Card App (2K+ Adaptive Control Center)"
+            VALUE "CompanyName", "JCast Project"
+            VALUE "FileDescription", "JCast for iOS (USB Speed Adaptive 2K+ Capture App)"
             VALUE "FileVersion", IOS_VCAM_VER_STR
-            VALUE "InternalName", "ios_vcam_gui"
-            VALUE "LegalCopyright", "Copyright (C) 2026"
-            VALUE "OriginalFilename", "ios_vcam_gui.exe"
-            VALUE "ProductName", "iOS USB Capture Card"
+            VALUE "InternalName", "JCastForIos"
+            VALUE "LegalCopyright", "Copyright (C) 2026 JCast Project"
+            VALUE "OriginalFilename", "JCast for iOS.exe"
+            VALUE "ProductName", "JCast for iOS"
             VALUE "ProductVersion", IOS_VCAM_VER_STR
         END
     END

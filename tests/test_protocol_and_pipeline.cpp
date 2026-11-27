@@ -2,6 +2,7 @@
 #include "ios_vcam/image_convert.h"
 #include "ios_vcam/qt_session.h"
 #include "ios_vcam/shared_ipc.h"
+#include "ios_vcam/usb_ios_transport.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -283,10 +284,43 @@ bool Test2KPlusAdaptiveAspectAndMultiReaderIpc() {
     return true;
 }
 
+bool TestUsbSpeedResolutionGatingAndMaxClamp() {
+    // Verify USB port link speed -> selectable max resolution ceiling mapping
+    ASSERT_TRUE(MaxSelectableDimForUsbSpeed(UsbLinkSpeed::Low_1_5Mbps) == 1280U,
+                "USB 1.0 should cap selectable max resolution at 1280p");
+    ASSERT_TRUE(MaxSelectableDimForUsbSpeed(UsbLinkSpeed::Full_12Mbps) == 1280U,
+                "USB 1.1 should cap selectable max resolution at 1280p");
+    ASSERT_TRUE(MaxSelectableDimForUsbSpeed(UsbLinkSpeed::High_480Mbps) == 2560U,
+                "USB 2.0 (480Mbps) should cap selectable max resolution at 2560p (2K)");
+    ASSERT_TRUE(MaxSelectableDimForUsbSpeed(UsbLinkSpeed::Super_5Gbps) == 3840U,
+                "USB 3.0 (5Gbps) should unlock full 3840p native resolution");
+    ASSERT_TRUE(MaxSelectableDimForUsbSpeed(UsbLinkSpeed::SuperPlus_10Gbps) == 3840U,
+                "USB 3.2 Gen 2 (10Gbps) should unlock full 3840p native resolution");
+    ASSERT_TRUE(MaxSelectableDimForUsbSpeed(UsbLinkSpeed::SuperPlus_20Gbps) == 3840U,
+                "USB 3.2 Gen 2x2 (20Gbps) should unlock full 3840p native resolution");
+
+    // Verify proportional clamping preserves exact device aspect ratio & 4x2 alignment
+    uint32_t w = 0, h = 0;
+    // iPhone 16 Pro Max (2868x1320) unlocked on USB 3.x (3840 cap) -> unchanged 2868x1320
+    ClampAdaptiveDimensionsToMax(2868, 1320, 3840, w, h);
+    ASSERT_TRUE(w == 2868 && h == 1320, "3840 cap should keep native 2868x1320 untouched");
+
+    // iPhone 16 Pro Max (2868x1320) capped at 2560p (USB 2.0 max) -> 2560x1178 (4x2 aligned)
+    ClampAdaptiveDimensionsToMax(2868, 1320, 2560, w, h);
+    ASSERT_TRUE(w == 2560 && (h % 2) == 0 && h >= 1176 && h <= 1180,
+                "2560 cap should proportionally clamp 2868x1320 to ~2560x1178");
+
+    // iPhone 16 Pro Max (2868x1320) capped at 1920p -> 1920x884 (4x2 aligned)
+    ClampAdaptiveDimensionsToMax(2868, 1320, 1920, w, h);
+    ASSERT_TRUE(w == 1920 && h == 884, "1920 cap should proportionally clamp 2868x1320 to 1920x884");
+
+    return true;
+}
+
 }  // namespace
 
 int main() {
-    std::cout << "[ios-usb-vcam] Running protocol & 2K+ adaptive pipeline unit tests...\n";
+    std::cout << "[JCast for iOS] Running protocol, USB speed gating & 2K+ adaptive pipeline unit tests...\n";
     if (!TestExactQuickTimeHexVectors()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestExactQuickTimeHexVectors\n";
     if (!TestSpsResolutionAndAvccConversion()) return EXIT_FAILURE;
@@ -295,6 +329,8 @@ int main() {
     std::cout << "  [PASS] TestFragmentedHandshakeAndMediaSession\n";
     if (!Test2KPlusAdaptiveAspectAndMultiReaderIpc()) return EXIT_FAILURE;
     std::cout << "  [PASS] Test2KPlusAdaptiveAspectAndMultiReaderIpc\n";
-    std::cout << "[ios-usb-vcam] All tests passed successfully!\n";
+    if (!TestUsbSpeedResolutionGatingAndMaxClamp()) return EXIT_FAILURE;
+    std::cout << "  [PASS] TestUsbSpeedResolutionGatingAndMaxClamp\n";
+    std::cout << "[JCast for iOS] All tests passed successfully!\n";
     return EXIT_SUCCESS;
 }

@@ -1,4 +1,4 @@
-name: Windows x64 MSVC App & Installer Build
+name: Windows x64 MSVC App & Installer Build (JCast for iOS)
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
       - name: Build Release binaries (MSVC)
         run: cmake --build build-msvc --config Release --parallel
 
-      - name: Run protocol & media pipeline unit tests on Windows
+      - name: Run protocol, USB speed gating & media pipeline unit tests on Windows
         run: .\build-msvc\Release\ios_vcam_tests.exe
 
       - name: Stage native MSVC App & Portable bundle
@@ -30,7 +30,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "release-msvc-win64\drivers" | Out-Null
           Copy-Item "build-msvc\Release\ios_vcam_gui.exe" "release-msvc-win64\"
-          Copy-Item "build-msvc\Release\ios_vcam_gui.exe" "release-msvc-win64\iOS USB Capture.exe"
+          Copy-Item "build-msvc\Release\ios_vcam_gui.exe" "release-msvc-win64\JCast for iOS.exe"
           Copy-Item "build-msvc\Release\ios_vcam_dshow.dll" "release-msvc-win64\"
           Copy-Item "build-msvc\Release\ios_vcam_host.exe" "release-msvc-win64\"
           Copy-Item "build-msvc\Release\ios_vcam_driver_setup.exe" "release-msvc-win64\"
@@ -46,18 +46,18 @@ jobs:
             Copy-Item "dist-win64\drivers\*" "release-msvc-win64\drivers\"
           }
 
-          # Create clean Portable App ZIP
-          New-Item -ItemType Directory -Force -Path "build-installer\iOS-USB-Capture" | Out-Null
-          Copy-Item "release-msvc-win64\iOS USB Capture.exe" "build-installer\iOS-USB-Capture\"
-          Copy-Item "release-msvc-win64\ios_vcam_gui.exe" "build-installer\iOS-USB-Capture\"
-          Copy-Item "release-msvc-win64\ios_vcam_host.exe" "build-installer\iOS-USB-Capture\"
-          Copy-Item "release-msvc-win64\ios_vcam_driver_setup.exe" "build-installer\iOS-USB-Capture\"
-          Copy-Item "release-msvc-win64\ios_vcam_dshow.dll" "build-installer\iOS-USB-Capture\"
-          Copy-Item "release-msvc-win64\libusb-1.0.dll" "build-installer\iOS-USB-Capture\"
-          Copy-Item "release-msvc-win64\README.md" "build-installer\iOS-USB-Capture\"
-          Copy-Item "release-msvc-win64\CHANGELOG.md" "build-installer\iOS-USB-Capture\"
-          Copy-Item -Recurse "release-msvc-win64\drivers" "build-installer\iOS-USB-Capture\drivers"
-          Compress-Archive -Path "build-installer\iOS-USB-Capture" -DestinationPath "build-installer\iOS-USB-Capture-Portable-v1.3.0.zip" -Force
+          # Create clean Portable App ZIP (JCast-for-iOS-Portable-v1.4.0.zip)
+          New-Item -ItemType Directory -Force -Path "build-installer\JCast-for-iOS" | Out-Null
+          Copy-Item "release-msvc-win64\JCast for iOS.exe" "build-installer\JCast-for-iOS\"
+          Copy-Item "release-msvc-win64\ios_vcam_gui.exe" "build-installer\JCast-for-iOS\"
+          Copy-Item "release-msvc-win64\ios_vcam_host.exe" "build-installer\JCast-for-iOS\"
+          Copy-Item "release-msvc-win64\ios_vcam_driver_setup.exe" "build-installer\JCast-for-iOS\"
+          Copy-Item "release-msvc-win64\ios_vcam_dshow.dll" "build-installer\JCast-for-iOS\"
+          Copy-Item "release-msvc-win64\libusb-1.0.dll" "build-installer\JCast-for-iOS\"
+          Copy-Item "release-msvc-win64\README.md" "build-installer\JCast-for-iOS\"
+          Copy-Item "release-msvc-win64\CHANGELOG.md" "build-installer\JCast-for-iOS\"
+          Copy-Item -Recurse "release-msvc-win64\drivers" "build-installer\JCast-for-iOS\drivers"
+          Compress-Archive -Path "build-installer\JCast-for-iOS" -DestinationPath "build-installer\JCast-for-iOS-Portable-v1.4.0.zip" -Force
 
       - name: Build Windows App Setup.exe via Inno Setup 6
         shell: pwsh
@@ -72,40 +72,51 @@ jobs:
           }
           & $iscc "installer\ios_usb_capture.iss"
 
-      - name: Upload native MSVC binaries & App Installer packages
+      - name: Upload native MSVC binaries & JCast for iOS App packages
         uses: actions/upload-artifact@v4
         with:
-          name: ios-usb-vcam-app-packages
+          name: jcast-for-ios-app-packages
           path: |
             release-msvc-win64/
-            build-installer/iOS-USB-Capture-Setup-v1.3.0.exe
-            build-installer/iOS-USB-Capture-Portable-v1.3.0.zip
+            build-installer/JCast-for-iOS-Setup-v1.4.0.exe
+            build-installer/JCast-for-iOS-Portable-v1.4.0.zip
 
-      - name: Publish App Setup.exe & Portable.zip to GitHub Release v1.3.0
+      - name: Publish JCast for iOS Setup.exe & Portable.zip to GitHub Release v1.4.0
+        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           $notes = @"
-          ## 📦 Windows 10 / 11 正式版 App 下載
+          ## 🚀 JCast for iOS v1.4.0 — Windows 10 / 11 正式版 App 下載
 
-          1. **推薦下載：`iOS-USB-Capture-Setup-v1.3.0.exe`（正式安裝版 App）**
-             - 雙擊一鍵安裝，自動在**桌面**與**開始選單**建立帶有專屬高解析度圖示的 **「iOS USB 擷取卡」** App。
-             - 安裝過程自動註冊 DirectShow 2K+ 視訊/音訊虛擬擷取卡與微軟 WHQL 簽章 `libusb0` 過濾驅動服務。
-             - 支援從 Windows「設定 ➔ 應用程式」一鍵乾淨解除安裝。
-          2. **免安裝選擇：`iOS-USB-Capture-Portable-v1.3.0.zip`（綠色便攜版 App）**
-             - 解壓縮後直接雙擊資料夾內帶專屬圖示的 **`iOS USB Capture.exe`** 即可使用。
+          ### ✨ v1.4.0 重點更新
+          - **正式更名為「JCast for iOS」**：包含桌面與開始選單 App 捷徑、安裝程式與 OBS 虛擬擷取卡（`JCast for iOS (Video)` / `JCast for iOS (Audio)`，保留相同底層 COM CLSID 無縫相容既有場景）。
+          - **USB 接口速率智慧辨識 × 可選最大解析度分級開放**：
+            - 插入 iPhone / iPad 時透過 `libusb_get_device_speed` 非侵入式辨識連接埠與線材速率（`USB 3.x 5~20Gbps` / `USB 2.0 480Mbps` / `USB 1.1 12Mbps`），並於橫幅即時顯示。
+            - 僅於**開始擷取前**依據接口速率動態開放下拉選單的**可選最大解析度上限**（USB 3.x 解鎖最高 `3840p`、USB 2.0 最高開放 `2K 2560p`、USB 1.1 最高開放 `720p 1280p`）；**一旦開始傳輸即全程鎖定所選解析度，絕不在直播傳輸途中自動切換解析度**，確保 OBS 畫布與直播畫面零閃爍。
+
+          ---
+
+          ### 📦 下載檔案說明
+          1. **推薦下載：`JCast-for-iOS-Setup-v1.4.0.exe`（正式安裝版 App）**
+             - 雙擊一鍵安裝，自動在**桌面**與**開始選單**建立帶有專屬高解析度圖示的 **「JCast for iOS」** App，並完成虛擬擷取卡與微軟 WHQL 簽章驅動服務部署。
+          2. **免安裝選擇：`JCast-for-iOS-Portable-v1.4.0.zip`（綠色便攜版 App）**
+             - 解壓縮後直接雙擊資料夾內的 **`JCast for iOS.exe`** 即可使用。
           "@
-          gh release view v1.3.0 >$null 2>&1
+          gh release view v1.4.0 >$null 2>&1
           if ($LASTEXITCODE -eq 0) {
-            gh release upload v1.3.0 `
-              "build-installer\iOS-USB-Capture-Setup-v1.3.0.exe" `
-              "build-installer\iOS-USB-Capture-Portable-v1.3.0.zip" `
+            gh release edit v1.4.0 `
+              --title "JCast for iOS v1.4.0 (USB 接口速率辨識 × 2K+ 原生自適應 App)" `
+              --notes $notes
+            gh release upload v1.4.0 `
+              "build-installer\JCast-for-iOS-Setup-v1.4.0.exe" `
+              "build-installer\JCast-for-iOS-Portable-v1.4.0.zip" `
               --clobber
           } else {
-            gh release create v1.3.0 `
-              "build-installer\iOS-USB-Capture-Setup-v1.3.0.exe" `
-              "build-installer\iOS-USB-Capture-Portable-v1.3.0.zip" `
-              --title "iOS USB 擷取卡 App v1.3.0 (正式安裝包 + 專屬圖示 + 2K+ 自適應)" `
+            gh release create v1.4.0 `
+              "build-installer\JCast-for-iOS-Setup-v1.4.0.exe" `
+              "build-installer\JCast-for-iOS-Portable-v1.4.0.zip" `
+              --title "JCast for iOS v1.4.0 (USB 接口速率辨識 × 2K+ 原生自適應 App)" `
               --notes $notes
           }

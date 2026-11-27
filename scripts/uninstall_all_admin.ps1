@@ -13,15 +13,16 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
 Set-Location -LiteralPath $PSScriptRoot
 
 Write-Host "=============================================================" -ForegroundColor Cyan
-Write-Host "  iOS USB 通用虛擬擷取卡 (ios-usb-vcam) 完整移除程式" -ForegroundColor Cyan
+Write-Host "  JCast for iOS 完整移除程式" -ForegroundColor Cyan
 Write-Host "=============================================================" -ForegroundColor Cyan
 
-$runningHost = Get-Process -Name "ios_vcam_host" -ErrorAction SilentlyContinue
-if ($runningHost) {
-    Write-Host "[Info] 正在停止執行中的 ios_vcam_host.exe..." -ForegroundColor Yellow
-    Stop-Process -Name "ios_vcam_host" -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 500
+foreach ($procName in @("JCast for iOS", "ios_vcam_gui", "ios_vcam_host")) {
+    $p = Get-Process -Name $procName -ErrorAction SilentlyContinue
+    if ($p) {
+        Stop-Process -Name $procName -Force -ErrorAction SilentlyContinue
+    }
 }
+Start-Sleep -Milliseconds 400
 
 if (Test-Path ".\ios_vcam_driver_setup.exe") {
     & ".\ios_vcam_driver_setup.exe" --uninstall
@@ -30,5 +31,5 @@ if (Test-Path ".\ios_vcam_driver_setup.exe") {
 }
 
 Write-Host ""
-Write-Host "[完成] 已移除 Apple USB UpperFilter 過濾層並反註冊 DirectShow 虛擬擷取卡。" -ForegroundColor Green
+Write-Host "[完成] 已移除 Apple USB UpperFilter 過濾層並反註冊 JCast for iOS 虛擬擷取卡。" -ForegroundColor Green
 Read-Host "按 Enter 鍵關閉視窗"

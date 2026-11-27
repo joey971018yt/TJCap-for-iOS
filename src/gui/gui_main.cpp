@@ -1,5 +1,6 @@
 #include "ios_vcam/app_resource.h"
 #include "ios_vcam/dshow_guids.h"
+#include "ios_vcam/usb_ios_transport.h"
 #include "ios_vcam/wasapi_renderer.h"
 
 #include <windows.h>
@@ -61,6 +62,32 @@ struct SystemHealth {
     std::wstring ios_service_name;
 };
 
+struct ResOptionSpec {
+    uint32_t max_dim = 2560;
+    std::wstring mode_tag;  // e.g. L"native", L"1440p", L"1080p", L"720p"
+    std::wstring label;
+    std::wstring cli_args;
+};
+
+std::wstring FormatUsbSpeedBadgeWide(UsbLinkSpeed speed) {
+    switch (speed) {
+        case UsbLinkSpeed::SuperPlus_20Gbps:
+            return L"⚡ USB 3.2 Gen2x2 (20Gbps)｜已解鎖最高 3840p";
+        case UsbLinkSpeed::SuperPlus_10Gbps:
+            return L"⚡ USB 3.2 Gen2 (10Gbps)｜已解鎖最高 3840p";
+        case UsbLinkSpeed::Super_5Gbps:
+            return L"⚡ USB 3.0 (5Gbps)｜已解鎖最高 3840p";
+        case UsbLinkSpeed::High_480Mbps:
+            return L"🔌 USB 2.0 (480Mbps)｜最高可選 2K (2560p)";
+        case UsbLinkSpeed::Full_12Mbps:
+            return L"⚠️ USB 1.1 (12Mbps)｜最高可選 720p (1280p)";
+        case UsbLinkSpeed::Low_1_5Mbps:
+            return L"⚠️ USB 1.0 (1.5Mbps)｜最高可選 720p (1280p)";
+        default:
+            return L"";
+    }
+}
+
 std::wstring Utf8ToWide(const std::string& s) {
     if (s.empty()) return {};
     int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
@@ -83,6 +110,8 @@ std::filesystem::path AppDir() {
 
 void UnblockDownloadedFiles(const std::filesystem::path& base_dir) {
     const wchar_t* rel_files[] = {
+        L"JCast for iOS.exe",
+        L"ios_vcam_gui.exe",
         L"ios_vcam_dshow.dll",
         L"ios_vcam_host.exe",
         L"ios_vcam_driver_setup.exe",
@@ -230,7 +259,7 @@ public:
         wc.hIconSm = icon_small_ ? icon_small_ : wc.hIcon;
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
-        wc.lpszClassName = L"IosUsbVcamGuiWndClass";
+        wc.lpszClassName = L"JCastForIosGuiWndClass";
         RegisterClassExW(&wc);
 
         int win_w = Scale(780, dpi);
@@ -244,7 +273,7 @@ public:
         hwnd_ = CreateWindowExW(
             0,
             wc.lpszClassName,
-            L"iOS USB 擷取卡 v1.3 — 一鍵智慧控制台 (2K+ 原生自適應比例)",
+            L"JCast for iOS v1.4 — 一鍵智慧擷取控制台 (USB 速率辨識 × 2K+ 原生自適應)",
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
             pos_x, pos_y, win_w, win_h,
             nullptr, nullptr, hInst, this);
@@ -324,7 +353,7 @@ private:
         int grp1_y = Scale(148, dpi);
         int grp1_h = Scale(154, dpi);
         HWND grp_pref = CreateWindowExW(
-            0, L"BUTTON", L"擷取畫質、比例與音訊設定",
+            0, L"BUTTON", L"擷取畫質上限（依 USB 速率自動開放選項）、比例與音訊設定",
             WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
             margin, grp1_y, content_w, grp1_h, hwnd_, nullptr, hinst_, nullptr);
         SendMessageW(grp_pref, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
@@ -332,10 +361,10 @@ private:
         int lbl_w = Scale(158, dpi);
         int combo_w = content_w - lbl_w - Scale(28, dpi);
 
-        // Row 0: Resolution & Adaptive Aspect Ratio
+        // Row 0: Max Selectable Resolution & Adaptive Aspect Ratio
         int row0_y = grp1_y + Scale(28, dpi);
         HWND lbl_res = CreateWindowExW(
-            0, L"STATIC", L"輸出畫質與比例模式：",
+            0, L"STATIC", L"最大解析度與比例選項：",
             WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
             margin + Scale(14, dpi), row0_y, lbl_w, Scale(26, dpi), hwnd_, nullptr, hinst_, nullptr);
         SendMessageW(lbl_res, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
@@ -343,18 +372,10 @@ private:
         combo_res_mode_ = CreateWindowExW(
             0, L"COMBOBOX", L"",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-            margin + Scale(14, dpi) + lbl_w, row0_y, combo_w, Scale(220, dpi),
+            margin + Scale(14, dpi) + lbl_w, row0_y, combo_w, Scale(240, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdComboResMode)), hinst_, nullptr);
         SendMessageW(combo_res_mode_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
-        SendMessageW(combo_res_mode_, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"🌟 2K+ 原生自適應比例（推薦：依 iPhone/iPad 機型自動滿版無黑邊）"));
-        SendMessageW(combo_res_mode_, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"✨ 1080p 自適應比例（依機型自動滿版無黑邊、輕量低負載）"));
-        SendMessageW(combo_res_mode_, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"🖥 固定 2K 16:9 畫布 (2560×1440，直橫屏旋轉自動補黑邊)"));
-        SendMessageW(combo_res_mode_, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"🖥 固定 1080p 16:9 畫布 (1920×1080，傳統直播相容模式)"));
-        SendMessageW(combo_res_mode_, CB_SETCURSEL, 0, 0);
+        PopulateResolutionOptionsForSpeed(UsbLinkSpeed::Unknown, true);
 
         // Row 1: Status bar style
         int row1_y = grp1_y + Scale(60, dpi);
@@ -479,9 +500,149 @@ private:
         SendMessageW(edit_log_, WM_SETFONT, reinterpret_cast<WPARAM>(font_mono_), TRUE);
         SendMessageW(edit_log_, EM_SETLIMITTEXT, 256 * 1024, 0);
 
-        AppendLogLine(L"[歡迎] 已支援 2K+ 裝置原生解析度與自動比例自適應（iPhone 19.5:9 / iPad 4:3 滿版無黑邊）！");
-        RefreshHealthAndUi();
+        AppendLogLine(
+            L"[歡迎] 歡迎使用 JCast for iOS v1.4！支援依 USB 接口速率自動開放可選最大解析度選項（傳輸中鎖定不自動變動）與 2K+ 原生自適應比例！");
+        RefreshHealthAndUi(true);
         SetTimer(hwnd_, kTimerRefreshId, 2000, nullptr);
+    }
+
+    void PopulateResolutionOptionsForSpeed(UsbLinkSpeed speed, bool is_initial) {
+        if (!combo_res_mode_) return;
+
+        uint32_t prev_max_dim = 0;
+        std::wstring prev_mode_tag;
+        LRESULT cur_sel = SendMessageW(combo_res_mode_, CB_GETCURSEL, 0, 0);
+        if (!is_initial && cur_sel >= 0 && static_cast<size_t>(cur_sel) < res_options_.size()) {
+            prev_max_dim = res_options_[static_cast<size_t>(cur_sel)].max_dim;
+            prev_mode_tag = res_options_[static_cast<size_t>(cur_sel)].mode_tag;
+        }
+
+        const uint32_t max_cap = MaxSelectableDimForUsbSpeed(speed);
+        std::vector<ResOptionSpec> next_opts;
+
+        if (max_cap >= 3840U) {
+            // USB 3.x (5 / 10 / 20 Gbps): unlock full 3840p native tier + all lower tiers
+            next_opts.push_back({
+                3840U,
+                L"native",
+                L"🌟 原生極限無上限（最高 3840p 自適應比例 — USB 3.x 高速接口已解鎖）",
+                L" --res native --max-dim 3840",
+            });
+            next_opts.push_back({
+                2560U,
+                L"native",
+                L"💎 2K 高畫質上限（最高 2560p 自適應比例）",
+                L" --res native --max-dim 2560",
+            });
+            next_opts.push_back({
+                1920U,
+                L"native",
+                L"✨ 1080p 標準上限（最高 1920p 自適應比例、低負載）",
+                L" --res native --max-dim 1920",
+            });
+            next_opts.push_back({
+                1280U,
+                L"native",
+                L"⚡ 720p 流暢上限（最高 1280p 自適應比例）",
+                L" --res native --max-dim 1280",
+            });
+            next_opts.push_back({
+                2560U,
+                L"1440p",
+                L"🖥 固定 2K 16:9 畫布 (2560×1440，直橫屏旋轉自動補黑邊)",
+                L" --res 1440p --max-dim 2560",
+            });
+            next_opts.push_back({
+                1920U,
+                L"1080p",
+                L"🖥 固定 1080p 16:9 畫布 (1920×1080，傳統直播相容模式)",
+                L" --res 1080p --max-dim 1920",
+            });
+        } else if (max_cap >= 2560U) {
+            // USB 2.0 (480 Mbps) or Unplugged: cap selectable max at 2K (2560p); 3840p option is gated out
+            if (speed == UsbLinkSpeed::High_480Mbps) {
+                next_opts.push_back({
+                    2560U,
+                    L"native",
+                    L"💎 2K 高畫質上限（最高 2560p 自適應比例 — USB 2.0 接口最高上限）",
+                    L" --res native --max-dim 2560",
+                });
+                next_opts.push_back({
+                    1920U,
+                    L"native",
+                    L"✨ 1080p 標準上限（最高 1920p 自適應比例 — USB 2.0 穩定推薦）",
+                    L" --res native --max-dim 1920",
+                });
+            } else {
+                next_opts.push_back({
+                    2560U,
+                    L"native",
+                    L"💎 2K 高畫質上限（最高 2560p 自適應 — 插入 USB 3.x 接口將解鎖 3840p）",
+                    L" --res native --max-dim 2560",
+                });
+                next_opts.push_back({
+                    1920U,
+                    L"native",
+                    L"✨ 1080p 標準上限（最高 1920p 自適應比例、低負載）",
+                    L" --res native --max-dim 1920",
+                });
+            }
+            next_opts.push_back({
+                1280U,
+                L"native",
+                L"⚡ 720p 流暢上限（最高 1280p 自適應比例）",
+                L" --res native --max-dim 1280",
+            });
+            next_opts.push_back({
+                2560U,
+                L"1440p",
+                L"🖥 固定 2K 16:9 畫布 (2560×1440，直橫屏旋轉自動補黑邊)",
+                L" --res 1440p --max-dim 2560",
+            });
+            next_opts.push_back({
+                1920U,
+                L"1080p",
+                L"🖥 固定 1080p 16:9 畫布 (1920×1080，傳統直播相容模式)",
+                L" --res 1080p --max-dim 1920",
+            });
+        } else {
+            // USB 1.1 (1.5 / 12 Mbps): cap selectable max at 720p (1280p)
+            next_opts.push_back({
+                1280U,
+                L"native",
+                L"⚡ 720p 流暢上限（最高 1280p 自適應比例 — USB 1.1 接口最高上限）",
+                L" --res native --max-dim 1280",
+            });
+            next_opts.push_back({
+                960U,
+                L"native",
+                L"📱 540p 省頻寬上限（最高 960p 自適應比例）",
+                L" --res native --max-dim 960",
+            });
+            next_opts.push_back({
+                1280U,
+                L"720p",
+                L"🖥 固定 720p 16:9 畫布 (1280×720)",
+                L" --res 720p --max-dim 1280",
+            });
+        }
+
+        res_options_ = std::move(next_opts);
+        SendMessageW(combo_res_mode_, CB_RESETCONTENT, 0, 0);
+        for (const auto& opt : res_options_) {
+            SendMessageW(combo_res_mode_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(opt.label.c_str()));
+        }
+
+        int target_idx = 0;
+        if (!is_initial && user_manually_picked_res_ && prev_max_dim > 0) {
+            for (size_t i = 0; i < res_options_.size(); ++i) {
+                if (res_options_[i].max_dim == prev_max_dim && res_options_[i].mode_tag == prev_mode_tag) {
+                    target_idx = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
+        SendMessageW(combo_res_mode_, CB_SETCURSEL, target_idx, 0);
     }
 
     void PopulateAudioEndpoints() {
@@ -493,7 +654,7 @@ private:
         audio_endpoint_matches_.push_back(L"__AUTO__");
 
         SendMessageW(combo_audio_, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(L"僅輸出至 OBS DirectShow 擷取卡（不在電腦喇叭播放）"));
+                     reinterpret_cast<LPARAM>(L"僅輸出至 OBS「JCast for iOS (Audio)」（不在電腦喇叭播放）"));
         audio_endpoint_matches_.push_back(L"__NONE__");
 
         auto eps = WasapiAudioRouter::EnumerateRenderEndpoints();
@@ -533,9 +694,34 @@ private:
         }
     }
 
-    void RefreshHealthAndUi() {
+    void RefreshHealthAndUi(bool force_usb_speed_reprobe = false) {
         health_ = ProbeSystemHealth(base_dir_);
         bool running = host_running_.load(std::memory_order_acquire);
+
+        // STRICT RULE: Never probe or alter selectable resolution options while actively transmitting!
+        if (!running) {
+            if (health_.ios_usb == IosUsbState::Unplugged) {
+                if (detected_usb_speed_ != UsbLinkSpeed::Unknown) {
+                    detected_usb_speed_ = UsbLinkSpeed::Unknown;
+                    PopulateResolutionOptionsForSpeed(UsbLinkSpeed::Unknown, false);
+                }
+            } else if (force_usb_speed_reprobe ||
+                       prev_ios_usb_ == IosUsbState::Unplugged ||
+                       detected_usb_speed_ == UsbLinkSpeed::Unknown) {
+                UsbLinkSpeed new_spd = UsbIosTransport::ProbeConnectedIosLinkSpeed();
+                if (new_spd != detected_usb_speed_) {
+                    detected_usb_speed_ = new_spd;
+                    PopulateResolutionOptionsForSpeed(new_spd, false);
+                    uint32_t cap = MaxSelectableDimForUsbSpeed(new_spd);
+                    AppendLogLine(
+                        L"[USB 速率辨識] 已偵測到連接埠速率：" +
+                        Utf8ToWide(UsbLinkSpeedName(new_spd)) +
+                        L" ➔ 已開放最高 " + std::to_wstring(cap) +
+                        L"p 解析度選項（開始傳輸後將全程鎖定所選解析度，不會中途自動變動）。");
+                }
+            }
+        }
+        prev_ios_usb_ = health_.ios_usb;
 
         if (running) {
             if (running_mock_) {
@@ -557,9 +743,9 @@ private:
                                (health_.ios_usb == IosUsbState::PluggedNeedFilter);
             if (needs_setup) {
                 SetWindowTextW(btn_smart_start_,
-                               L"🚀 智慧一鍵啟動（自動安裝驅動與虛擬擷取卡 ➔ 開始 2K+ 自適應投影）");
+                               L"🚀 智慧一鍵啟動（自動安裝驅動與 JCast 虛擬擷取卡 ➔ 開始投影）");
             } else {
-                SetWindowTextW(btn_smart_start_, L"▶ 開始 iPhone / iPad 有線投影擷取 (2K+ 自適應 @ 60fps)");
+                SetWindowTextW(btn_smart_start_, L"▶ 開始 iPhone / iPad 有線投影擷取（鎖定所選解析度 @ 60fps）");
             }
             SetWindowTextW(btn_mock_, L"🧪 免插手機自測 (2K 彩條+測試音)");
             EnableWindow(btn_mock_, TRUE);
@@ -591,8 +777,8 @@ private:
             bg_color = RGB(232, 248, 238);
             accent_color = RGB(22, 136, 72);
             headline = running_mock_
-                           ? L"🟢 正在輸出 2K@60fps 動態彩條與 48kHz 測試音（請開啟 OBS 預覽）"
-                           : L"🟢 iPhone / iPad 有線投影執行中（2K+ 自適應比例 @ 60fps + 48kHz 音訊）";
+                           ? L"🟢 JCast 正在輸出自測動態彩條與 48kHz 測試音（請開啟 OBS 預覽）"
+                           : L"🟢 JCast 有線投影執行中（已鎖定所選解析度 @ 60fps + 48kHz 音訊）";
         } else if (health_.ios_usb == IosUsbState::PluggedZadigConflict) {
             bg_color = RGB(255, 240, 240);
             accent_color = RGB(196, 43, 28);
@@ -601,15 +787,15 @@ private:
                    health_.ios_usb == IosUsbState::PluggedNeedFilter) {
             bg_color = RGB(255, 248, 232);
             accent_color = RGB(180, 105, 14);
-            headline = L"⚡ 準備開始：請點擊下方「智慧一鍵啟動」自動完成驅動掛載與 2K+ 投影";
+            headline = L"⚡ 準備開始：請點擊下方「智慧一鍵啟動」自動完成驅動掛載與高畫質投影";
         } else if (health_.ios_usb == IosUsbState::PluggedReady) {
             bg_color = RGB(234, 247, 240);
             accent_color = RGB(20, 130, 75);
-            headline = L"✅ iPhone 與驅動皆已就緒！點擊「開始有線投影擷取」自動匹配原生 2K+ 比例";
+            headline = L"✅ iPhone 與驅動皆已就緒！請確認解析度選項後點擊「開始有線投影擷取」";
         } else {
             bg_color = RGB(242, 245, 250);
             accent_color = RGB(45, 95, 185);
-            headline = L"🔌 驅動已就緒 — 請插上已解鎖並點「信任」的 iPhone/iPad，或點「免插手機自測」";
+            headline = L"🔌 JCast for iOS 已就緒 — 請插上已點「信任」的 iPhone/iPad 自動辨識 USB 速率";
         }
 
         RECT local_rc{0, 0, w, h};
@@ -650,31 +836,34 @@ private:
 
         std::wstring dshow_txt;
         if (health_.dshow == DshowRegState::Ready) {
-            dshow_txt = L"• DirectShow 2K+ 視訊/音訊虛擬擷取卡：✅ 已安裝";
+            dshow_txt = L"• DirectShow 虛擬擷取卡 (JCast for iOS)：✅ 已安裝";
         } else if (health_.dshow == DshowRegState::PathMismatch) {
-            dshow_txt = L"• DirectShow 2K+ 視訊/音訊虛擬擷取卡：⚠️ 資料夾已移動（點一鍵啟動自動更新路徑）";
+            dshow_txt = L"• DirectShow 虛擬擷取卡 (JCast for iOS)：⚠️ 資料夾已移動（點一鍵啟動自動更新）";
         } else {
-            dshow_txt = L"• DirectShow 2K+ 視訊/音訊虛擬擷取卡：⏳ 尚未註冊（點一鍵啟動自動完成）";
+            dshow_txt = L"• DirectShow 虛擬擷取卡 (JCast for iOS)：⏳ 尚未註冊（點一鍵啟動自動完成）";
         }
 
         std::wstring usb_drv_txt = health_.libusb_service_ok
                                        ? L"• WHQL 簽章過濾驅動 (libusb0)：✅ 已就緒"
                                        : L"• WHQL 簽章過濾驅動 (libusb0)：⏳ 待安裝";
 
+        std::wstring speed_badge = FormatUsbSpeedBadgeWide(detected_usb_speed_);
+        std::wstring speed_suffix = speed_badge.empty() ? L"" : (L" [" + speed_badge + L"]");
+
         std::wstring phone_txt;
         switch (health_.ios_usb) {
             case IosUsbState::PluggedReady:
-                phone_txt = L"• iPhone / iPad USB 狀態：✅ 已連線且 UpperFilter 過濾層已掛載";
+                phone_txt = L"• iPhone / iPad USB：✅ 已連線" + speed_suffix;
                 break;
             case IosUsbState::PluggedNeedFilter:
-                phone_txt = L"• iPhone / iPad USB 狀態：📱 已偵測到裝置（點一鍵啟動自動掛載過濾層）";
+                phone_txt = L"• iPhone / iPad USB：📱 已偵測（點啟動掛載過濾層）" + speed_suffix;
                 break;
             case IosUsbState::PluggedZadigConflict:
-                phone_txt = L"• iPhone / iPad USB 狀態：❌ 偵測到 " + health_.ios_service_name +
-                            L" 覆蓋了原廠 usbccgp/usbaapl64";
+                phone_txt = L"• iPhone / iPad USB：❌ 偵測到 " + health_.ios_service_name +
+                            L" 覆蓋原廠驅動";
                 break;
             case IosUsbState::Unplugged:
-                phone_txt = L"• iPhone / iPad USB 狀態：🔌 尚未插入 USB（插入後請解鎖螢幕並按「信任這部電腦」）";
+                phone_txt = L"• iPhone / iPad USB：🔌 尚未插入 USB（插入後自動辨識 USB 3.x / 2.0 速率並更新可選上限）";
                 break;
         }
 
@@ -695,8 +884,8 @@ private:
     bool RunDriverSetupElevated(const wchar_t* arg_flag) {
         std::filesystem::path exe = base_dir_ / L"ios_vcam_driver_setup.exe";
         if (!std::filesystem::exists(exe)) {
-            AppendLogLine(L"[錯誤] 找不到 ios_vcam_driver_setup.exe，請確認 dist-win64 資料夾檔案完整！");
-            MessageBoxW(hwnd_, L"找不到 ios_vcam_driver_setup.exe，請確認完整解壓縮 dist-win64 資料夾！",
+            AppendLogLine(L"[錯誤] 找不到 ios_vcam_driver_setup.exe，請確認程式資料夾檔案完整！");
+            MessageBoxW(hwnd_, L"找不到 ios_vcam_driver_setup.exe，請確認完整安裝或解壓縮 JCast for iOS 資料夾！",
                         L"缺少檔案", MB_ICONERROR | MB_OK);
             return false;
         }
@@ -734,15 +923,15 @@ private:
             DWORD exit_code = 1;
             GetExitCodeProcess(sei.hProcess, &exit_code);
             CloseHandle(sei.hProcess);
-            RefreshHealthAndUi();
+            RefreshHealthAndUi(true);
             if (exit_code == 0) {
-                AppendLogLine(L"[成功] 驅動過濾層與 DirectShow 虛擬擷取卡設定完成！");
+                AppendLogLine(L"[成功] 驅動過濾層與 JCast for iOS 虛擬擷取卡設定完成！");
                 return true;
             }
             AppendLogLine(L"[提醒] 設定程式回傳代碼 " + std::to_wstring(exit_code) + L"，請確認檔案完整或重試。");
             return false;
         }
-        RefreshHealthAndUi();
+        RefreshHealthAndUi(true);
         return true;
     }
 
@@ -754,7 +943,7 @@ private:
         std::filesystem::path host_exe = base_dir_ / L"ios_vcam_host.exe";
         if (!std::filesystem::exists(host_exe)) {
             AppendLogLine(L"[錯誤] 找不到 ios_vcam_host.exe！");
-            MessageBoxW(hwnd_, L"找不到 ios_vcam_host.exe，請確認完整解壓縮 dist-win64 資料夾！",
+            MessageBoxW(hwnd_, L"找不到 ios_vcam_host.exe，請確認完整安裝或解壓縮 JCast for iOS 資料夾！",
                         L"缺少檔案", MB_ICONERROR | MB_OK);
             return;
         }
@@ -773,6 +962,8 @@ private:
             }
             if (health_.ios_usb == IosUsbState::Unplugged) {
                 AppendLogLine(L"[提示] 目前尚未插入 iPhone，已進入等待連線模式；插上手機並點「信任」後若為首次插入，再點一次「安裝／修復驅動」即可掛載過濾層。");
+            } else {
+                RefreshHealthAndUi(true);
             }
         }
 
@@ -797,10 +988,13 @@ private:
         std::wstring cmd = L"\"" + host_exe.wstring() + L"\" --stop-event " + event_name;
 
         LRESULT res_idx = SendMessageW(combo_res_mode_, CB_GETCURSEL, 0, 0);
-        if (res_idx == 1) cmd += L" --res native1080";
-        else if (res_idx == 2) cmd += L" --res 1440p";
-        else if (res_idx == 3) cmd += L" --res 1080p";
-        else cmd += L" --res native";
+        std::wstring chosen_res_label = L"預設自適應上限";
+        if (res_idx >= 0 && static_cast<size_t>(res_idx) < res_options_.size()) {
+            cmd += res_options_[static_cast<size_t>(res_idx)].cli_args;
+            chosen_res_label = res_options_[static_cast<size_t>(res_idx)].label;
+        } else {
+            cmd += L" --res native --max-dim 2560";
+        }
 
         if (mock_mode) {
             cmd += L" --mock";
@@ -863,10 +1057,10 @@ private:
         }
         running_mock_ = mock_mode;
         host_running_.store(true, std::memory_order_release);
-        RefreshHealthAndUi();
+        RefreshHealthAndUi(false);
 
-        AppendLogLine(mock_mode ? L"=== 已啟動免手機自測模式 (2K@60fps 彩條 + 48kHz 測試音) ==="
-                                : L"=== 已啟動 iPhone / iPad 有線投影擷取 (2K+ 原生自適應) ===");
+        AppendLogLine(mock_mode ? L"=== 已啟動 JCast 免手機自測模式（彩條 + 48kHz 測試音） ==="
+                                : (L"=== 已啟動 JCast 有線投影｜本次鎖定選項：" + chosen_res_label + L" ==="));
 
         if (log_reader_thread_.joinable()) {
             log_reader_thread_.join();
@@ -924,22 +1118,22 @@ private:
         }
         host_running_.store(false, std::memory_order_release);
         running_mock_ = false;
-        RefreshHealthAndUi();
+        RefreshHealthAndUi(true);
     }
 
     void ShowAndCopyObsGuide() {
         const wchar_t* guide =
-            L"【OBS Studio 2K+ 滿版自適應比例設定步驟】\r\n\r\n"
-            L"1. 先在本控制台插上手機、打開要直播的畫面方向（橫向或直向），點擊「智慧一鍵啟動」。\r\n"
-            L"2. 開啟 OBS Studio，新增「視訊擷取裝置」➔ 選擇：iOS USB Capture Card (Video)\r\n"
-            L"3.「解析度/FPS 類型」保持「裝置預設值」：OBS 會自動抓到您 iPhone/iPad 的原生 2K+ 解析度與真實比例（滿版零黑邊）！\r\n"
+            L"【JCast for iOS — OBS Studio 滿版自適應比例設定步驟】\r\n\r\n"
+            L"1. 先在本控制台插上手機（自動辨識 USB 速率並開放最大解析度選項），選好解析度後點擊「智慧一鍵啟動」。\r\n"
+            L"2. 開啟 OBS Studio，新增「視訊擷取裝置」➔ 選擇：JCast for iOS (Video)\r\n"
+            L"3.「解析度/FPS 類型」保持「裝置預設值」：OBS 會自動抓到您鎖定的 iPhone/iPad 原生比例（滿版零黑邊）！\r\n"
             L"   （若您先開了 OBS 才連手機，只要在 OBS 來源點一下「停用 ➔ 啟用」就會自動刷新成原生比例）\r\n"
-            L"4. 往下捲動到底部勾選「使用自訂音訊裝置」➔ 選擇：iOS USB Capture Card (Audio)\r\n\r\n"
-            L"（裝置名稱已複製到剪貼簿：iOS USB Capture Card (Video)）";
+            L"4. 往下捲動到底部勾選「使用自訂音訊裝置」➔ 選擇：JCast for iOS (Audio)\r\n\r\n"
+            L"（裝置名稱已複製到剪貼簿：JCast for iOS (Video)）";
 
         if (OpenClipboard(hwnd_)) {
             EmptyClipboard();
-            const wchar_t* clip_txt = L"iOS USB Capture Card (Video)";
+            const wchar_t* clip_txt = L"JCast for iOS (Video)";
             size_t cb = (wcslen(clip_txt) + 1) * sizeof(wchar_t);
             HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, cb);
             if (hMem) {
@@ -952,7 +1146,7 @@ private:
             }
             CloseClipboard();
         }
-        MessageBoxW(hwnd_, guide, L"OBS 2K+ 自適應比例設定教學", MB_ICONINFORMATION | MB_OK);
+        MessageBoxW(hwnd_, guide, L"JCast for iOS — OBS 設定教學", MB_ICONINFORMATION | MB_OK);
     }
 
     static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -994,19 +1188,23 @@ private:
 
             case WM_TIMER:
                 if (wParam == kTimerRefreshId) {
-                    RefreshHealthAndUi();
+                    RefreshHealthAndUi(false);
                 }
                 return 0;
 
             case WM_DEVICECHANGE:
                 if (wParam == DBT_DEVNODES_CHANGED) {
-                    RefreshHealthAndUi();
+                    RefreshHealthAndUi(true);
                 }
                 return TRUE;
 
             case WM_COMMAND: {
                 int id = LOWORD(wParam);
                 int code = HIWORD(wParam);
+                if (code == CBN_SELCHANGE && id == kIdComboResMode) {
+                    user_manually_picked_res_ = true;
+                    return 0;
+                }
                 if (code == BN_CLICKED) {
                     if (id == kIdBtnSmartStart) {
                         if (host_running_.load(std::memory_order_acquire)) {
@@ -1038,7 +1236,7 @@ private:
                     if (id == kIdBtnUninstall) {
                         if (MessageBoxW(
                                 hwnd_,
-                                L"確定要移除 Apple USB 過濾層並反註冊 DirectShow 虛擬擷取卡嗎？",
+                                L"確定要移除 Apple USB 過濾層並反註冊 JCast for iOS 虛擬擷取卡嗎？",
                                 L"確認解除安裝",
                                 MB_ICONQUESTION | MB_YESNO) == IDYES) {
                             if (host_running_.load(std::memory_order_acquire)) {
@@ -1097,6 +1295,10 @@ private:
     HWND hwnd_ = nullptr;
     std::filesystem::path base_dir_;
     SystemHealth health_;
+    IosUsbState prev_ios_usb_ = IosUsbState::Unplugged;
+    UsbLinkSpeed detected_usb_speed_ = UsbLinkSpeed::Unknown;
+    bool user_manually_picked_res_ = false;
+    std::vector<ResOptionSpec> res_options_;
 
     HICON icon_big_ = nullptr;
     HICON icon_small_ = nullptr;

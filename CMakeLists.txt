@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ios_usb_vcam VERSION 1.3.0 LANGUAGES CXX)
+project(ios_usb_vcam VERSION 1.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -129,13 +129,14 @@ if(WIN32)
         target_link_options(ios_vcam_driver_setup PRIVATE -static -static-libgcc -static-libstdc++)
     endif()
 
-    # 4. One-Click Graphical App (ios_vcam_gui.exe) with custom App Icon & PerMonitorV2 DPI manifest
+    # 4. One-Click Graphical App (ios_vcam_gui.exe) with custom App Icon, USB Speed Probe & PerMonitorV2 DPI manifest
     set(IOS_VCAM_GUI_EXTRA_SRCS src/gui/ios_vcam_gui.rc)
     if(MSVC)
         list(APPEND IOS_VCAM_GUI_EXTRA_SRCS src/gui/ios_vcam_gui.manifest)
     endif()
     add_executable(ios_vcam_gui WIN32
         src/gui/gui_main.cpp
+        src/usb/usb_ios_transport.cpp
         src/decoder/wasapi_renderer.cpp
         ${IOS_VCAM_GUI_EXTRA_SRCS}
     )
