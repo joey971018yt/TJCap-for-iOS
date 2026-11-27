@@ -1,4 +1,5 @@
 #include "ios_vcam/app_resource.h"
+#include "ios_vcam/app_updater.h"
 #include "ios_vcam/dshow_guids.h"
 #include "ios_vcam/usb_ios_transport.h"
 #include "ios_vcam/wasapi_renderer.h"
@@ -12,6 +13,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <cwchar>
 #include <cwctype>
@@ -31,6 +33,7 @@ constexpr int kIdBtnMockTest = 1002;
 constexpr int kIdBtnRepairDriver = 1003;
 constexpr int kIdBtnUninstall = 1004;
 constexpr int kIdBtnCopyObsGuide = 1005;
+constexpr int kIdBtnCheckUpdate = 1006;
 constexpr int kIdComboResMode = 1010;
 constexpr int kIdComboStatusBar = 1011;
 constexpr int kIdComboAudioOut = 1012;
@@ -39,7 +42,9 @@ constexpr int kIdEditLog = 1020;
 
 constexpr UINT kWmAppendLog = WM_APP + 1;
 constexpr UINT kWmHostExited = WM_APP + 2;
+constexpr UINT kWmUpdateCheckDone = WM_APP + 3;
 constexpr UINT_PTR kTimerRefreshId = 1;
+constexpr UINT_PTR kTimerStartupUpdateId = 2;
 
 enum class DshowRegState {
     NotRegistered,
@@ -232,12 +237,509 @@ SystemHealth ProbeSystemHealth(const std::filesystem::path& base_dir) {
     return h;
 }
 
+std::wstring NormalizeLineEndingsCrlf(std::string_view utf8_text) {
+    std::string norm;
+    norm.reserve(utf8_text.size() + 64);
+    for (size_t i = 0; i < utf8_text.size(); ++i) {
+        char c = utf8_text[i];
+        if (c == '\r') {
+            norm.push_back('\r');
+            norm.push_back('\n');
+            if (i + 1 < utf8_text.size() && utf8_text[i + 1] == '\n') {
+                ++i;
+            }
+        } else if (c == '\n') {
+            norm.push_back('\r');
+            norm.push_back('\n');
+        } else {
+            norm.push_back(c);
+        }
+    }
+    return Utf8ToWide(norm);
+}
+
+std::wstring FormatBytesMb(uint64_t bytes) {
+    wchar_t buf[64] = {0};
+    double mb = static_cast<double>(bytes) / (1024.0 * 1024.0);
+    std::swprintf(buf, 64, L"%.2f MB", mb);
+    return buf;
+}
+
+class UpdateModalWindow {
+public:
+    UpdateModalWindow(
+        HINSTANCE hinst,
+        HWND parent,
+        std::filesystem::path app_dir,
+        const UpdateCheckResult& info,
+        UINT dpi,
+        HFONT font_normal,
+        HFONT font_bold,
+        HFONT font_title,
+        HFONT font_mono,
+        HICON icon_small,
+        std::function<void()> on_stop_capture)
+        : hinst_(hinst),
+          parent_(parent),
+          app_dir_(std::move(app_dir)),
+          info_(info),
+          dpi_(dpi),
+          font_normal_(font_normal),
+          font_bold_(font_bold),
+          font_title_(font_title),
+          font_mono_(font_mono),
+          icon_small_(icon_small),
+          on_stop_capture_(std::move(on_stop_capture)) {
+        bool installed_mode = IsInstalledAppMode(app_dir_);
+        if (installed_mode && !info_.latest.setup_exe.browser_download_url.empty()) {
+            use_setup_exe_ = true;
+            target_asset_ = info_.latest.setup_exe;
+        } else if (!installed_mode && !info_.latest.portable_zip.browser_download_url.empty()) {
+            use_setup_exe_ = false;
+            target_asset_ = info_.latest.portable_zip;
+        } else if (!info_.latest.setup_exe.browser_download_url.empty()) {
+            use_setup_exe_ = true;
+            target_asset_ = info_.latest.setup_exe;
+        } else if (!info_.latest.portable_zip.browser_download_url.empty()) {
+            use_setup_exe_ = false;
+            target_asset_ = info_.latest.portable_zip;
+        }
+    }
+
+    ~UpdateModalWindow() {
+        cancel_flag_.store(true, std::memory_order_relaxed);
+        if (dl_thread_.joinable()) {
+            dl_thread_.join();
+        }
+    }
+
+    bool RunModal() {
+        static bool class_registered = false;
+        const wchar_t* kClsName = L"JCastUpdateModalWndClass";
+        if (!class_registered) {
+            WNDCLASSEXW wc{};
+            wc.cbSize = sizeof(wc);
+            wc.lpfnWndProc = &UpdateModalWindow::StaticDlgProc;
+            wc.hInstance = hinst_;
+            wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+            wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+            wc.lpszClassName = kClsName;
+            RegisterClassExW(&wc);
+            class_registered = true;
+        }
+
+        int dlg_w = MulDiv(590, static_cast<int>(dpi_), 96);
+        int dlg_h = MulDiv(450, static_cast<int>(dpi_), 96);
+
+        RECT prc{};
+        GetWindowRect(parent_, &prc);
+        int pos_x = prc.left + ((prc.right - prc.left) - dlg_w) / 2;
+        int pos_y = prc.top + ((prc.bottom - prc.top) - dlg_h) / 2;
+
+        std::wstring title = L"JCast for iOS — 發現新版本 " + Utf8ToWide(info_.latest.tag_name);
+        EnableWindow(parent_, FALSE);
+
+        dlg_hwnd_ = CreateWindowExW(
+            WS_EX_DLGMODALFRAME,
+            kClsName,
+            title.c_str(),
+            WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
+            pos_x,
+            pos_y,
+            dlg_w,
+            dlg_h,
+            parent_,
+            nullptr,
+            hinst_,
+            this);
+
+        if (!dlg_hwnd_) {
+            EnableWindow(parent_, TRUE);
+            return false;
+        }
+
+        if (icon_small_) {
+            SendMessageW(dlg_hwnd_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(icon_small_));
+        }
+
+        ShowWindow(dlg_hwnd_, SW_SHOWNORMAL);
+        UpdateWindow(dlg_hwnd_);
+
+        MSG msg{};
+        while (!modal_done_ && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            if (!IsDialogMessageW(dlg_hwnd_, &msg)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+
+        if (dl_thread_.joinable()) {
+            dl_thread_.join();
+        }
+
+        EnableWindow(parent_, TRUE);
+        if (IsWindow(dlg_hwnd_)) {
+            DestroyWindow(dlg_hwnd_);
+            dlg_hwnd_ = nullptr;
+        }
+        SetForegroundWindow(parent_);
+        return update_launched_;
+    }
+
+private:
+    static constexpr int kIdDlgBtnDownload = 2001;
+    static constexpr int kIdDlgBtnOpenWeb = 2002;
+    static constexpr int kIdDlgBtnCancel = 2003;
+    static constexpr int kIdDlgEditNotes = 2004;
+    static constexpr int kIdDlgProgress = 2005;
+
+    static constexpr UINT kWmDlgProgress = WM_APP + 10;
+    static constexpr UINT kWmDlgFinished = WM_APP + 11;
+
+    int S(int px) const {
+        return MulDiv(px, static_cast<int>(dpi_), 96);
+    }
+
+    void BuildDialogControls() {
+        RECT rc{};
+        GetClientRect(dlg_hwnd_, &rc);
+        int cw = rc.right - rc.left;
+        int ch = rc.bottom - rc.top;
+        int pad = S(16);
+        int inner_w = cw - pad * 2;
+
+        std::wstring hdr = L"🎉 發現新版本：" + Utf8ToWide(info_.latest.title);
+        HWND lbl_hdr = CreateWindowExW(
+            0, L"STATIC", hdr.c_str(),
+            WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS,
+            pad, S(14), inner_w, S(26), dlg_hwnd_, nullptr, hinst_, nullptr);
+        SendMessageW(lbl_hdr, WM_SETFONT, reinterpret_cast<WPARAM>(font_title_), TRUE);
+
+        std::wstring pkg_desc;
+        if (!target_asset_.browser_download_url.empty()) {
+            pkg_desc = (use_setup_exe_ ? L"安裝版自動升級 (" : L"便攜版原地自動更新 (") +
+                       Utf8ToWide(target_asset_.name) + L", " + FormatBytesMb(target_asset_.size_bytes) +
+                       (target_asset_.sha256_hex.empty() ? L")" : L", 含 SHA-256 驗證)");
+        } else {
+            pkg_desc = L"請開啟 GitHub Releases 網頁下載更新檔案";
+        }
+        std::wstring sub = L"目前版本：v" IOS_VCAM_VER_DISPLAY_WSTR L"  ➔  最新版本：" +
+                           Utf8ToWide(info_.latest.tag_name) + L"  ｜  " + pkg_desc;
+        HWND lbl_sub = CreateWindowExW(
+            0, L"STATIC", sub.c_str(),
+            WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS,
+            pad, S(44), inner_w, S(22), dlg_hwnd_, nullptr, hinst_, nullptr);
+        SendMessageW(lbl_sub, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+
+        HWND lbl_notes = CreateWindowExW(
+            0, L"STATIC", L"版本更新日誌 (GitHub Release Notes)：",
+            WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
+            pad, S(72), inner_w, S(20), dlg_hwnd_, nullptr, hinst_, nullptr);
+        SendMessageW(lbl_notes, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
+
+        int notes_top = S(96);
+        int notes_h = ch - notes_top - S(116);
+        edit_notes_ = CreateWindowExW(
+            WS_EX_CLIENTEDGE, L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
+            pad, notes_top, inner_w, std::max(S(100), notes_h),
+            dlg_hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdDlgEditNotes)), hinst_, nullptr);
+        SendMessageW(edit_notes_, WM_SETFONT, reinterpret_cast<WPARAM>(font_mono_), TRUE);
+        std::wstring notes_w = info_.latest.body_markdown.empty()
+                                   ? L"（此版本未附帶詳細文字說明，請點擊「開啟 GitHub 發布頁」查看。）"
+                                   : NormalizeLineEndingsCrlf(info_.latest.body_markdown);
+        SetWindowTextW(edit_notes_, notes_w.c_str());
+
+        int prog_y = ch - S(106);
+        progress_bar_ = CreateWindowExW(
+            0, PROGRESS_CLASSW, nullptr,
+            WS_CHILD | WS_VISIBLE | PBS_SMOOTH,
+            pad, prog_y, inner_w, S(20),
+            dlg_hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdDlgProgress)), hinst_, nullptr);
+        SendMessageW(progress_bar_, PBM_SETRANGE32, 0, 1000);
+        SendMessageW(progress_bar_, PBM_SETPOS, 0, 0);
+
+        lbl_status_ = CreateWindowExW(
+            0, L"STATIC", L"準備就緒 — 點擊下方按鈕即可自動從 GitHub 下載並完成升級。",
+            WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS,
+            pad, prog_y + S(24), inner_w, S(20), dlg_hwnd_, nullptr, hinst_, nullptr);
+        SendMessageW(lbl_status_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+
+        int btn_y = ch - S(50);
+        int gap = S(10);
+        int w_dl = (inner_w - gap * 2) * 46 / 100;
+        int w_web = (inner_w - gap * 2) * 30 / 100;
+        int w_can = inner_w - gap * 2 - w_dl - w_web;
+
+        btn_download_ = CreateWindowExW(
+            0, L"BUTTON", L"🚀 一鍵下載並自動更新",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+            pad, btn_y, w_dl, S(36),
+            dlg_hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdDlgBtnDownload)), hinst_, nullptr);
+        SendMessageW(btn_download_, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
+        if (target_asset_.browser_download_url.empty()) {
+            EnableWindow(btn_download_, FALSE);
+        }
+
+        btn_web_ = CreateWindowExW(
+            0, L"BUTTON", L"🌐 開啟 GitHub 發布頁",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            pad + w_dl + gap, btn_y, w_web, S(36),
+            dlg_hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdDlgBtnOpenWeb)), hinst_, nullptr);
+        SendMessageW(btn_web_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+
+        btn_cancel_ = CreateWindowExW(
+            0, L"BUTTON", L"稍後再說",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            pad + w_dl + gap + w_web + gap, btn_y, w_can, S(36),
+            dlg_hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdDlgBtnCancel)), hinst_, nullptr);
+        SendMessageW(btn_cancel_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+    }
+
+    void StartDownloadWorker() {
+        if (downloading_ || target_asset_.browser_download_url.empty()) return;
+
+        wchar_t tmp_buf[MAX_PATH * 2] = {0};
+        DWORD n = GetTempPathW(MAX_PATH * 2 - 1, tmp_buf);
+        std::filesystem::path tmp_dir = (n > 0) ? std::filesystem::path(tmp_buf) : app_dir_;
+        tmp_dir /= L"JCast_For_iOS_Update";
+        downloaded_file_ = tmp_dir / Utf8ToWide(target_asset_.name);
+
+        downloading_ = true;
+        cancel_flag_.store(false, std::memory_order_relaxed);
+        EnableWindow(btn_download_, FALSE);
+        SetWindowTextW(btn_cancel_, L"取消下載");
+        SendMessageW(progress_bar_, PBM_SETPOS, 0, 0);
+        SetWindowTextW(lbl_status_, L"正在連線至 GitHub Releases 伺服器...");
+
+        if (dl_thread_.joinable()) {
+            dl_thread_.join();
+        }
+
+        ReleaseAssetInfo asset_copy = target_asset_;
+        std::filesystem::path dst_copy = downloaded_file_;
+        HWND target_hwnd = dlg_hwnd_;
+
+        dl_thread_ = std::thread([this, asset_copy, dst_copy, target_hwnd]() {
+            std::string err;
+            uint64_t last_ui_tick = 0;
+            bool ok = DownloadReleaseAssetHttps(
+                asset_copy,
+                dst_copy,
+                &cancel_flag_,
+                [&](uint64_t done, uint64_t total) {
+                    uint64_t now = GetTickCount64();
+                    if (done < total && now - last_ui_tick < 60) return;
+                    last_ui_tick = now;
+
+                    int permille = (total > 0)
+                                       ? static_cast<int>(std::min<uint64_t>(1000ULL, (done * 1000ULL) / total))
+                                       : 0;
+                    std::wstring msg;
+                    if (total > 0) {
+                        int pct = permille / 10;
+                        msg = L"正在下載更新包... " + std::to_wstring(pct) + L"% (" +
+                              FormatBytesMb(done) + L" / " + FormatBytesMb(total) + L")";
+                    } else {
+                        msg = L"正在下載更新包... 已接收 " + FormatBytesMb(done);
+                    }
+                    auto* heap_msg = new std::wstring(std::move(msg));
+                    if (!PostMessageW(
+                            target_hwnd,
+                            kWmDlgProgress,
+                            static_cast<WPARAM>(permille),
+                            reinterpret_cast<LPARAM>(heap_msg))) {
+                        delete heap_msg;
+                    }
+                },
+                &err);
+
+            auto* heap_err = new std::wstring(Utf8ToWide(err));
+            if (!PostMessageW(
+                    target_hwnd,
+                    kWmDlgFinished,
+                    ok ? 1 : 0,
+                    reinterpret_cast<LPARAM>(heap_err))) {
+                delete heap_err;
+            }
+        });
+    }
+
+    void RequestCloseOrCancel() {
+        if (downloading_) {
+            cancel_flag_.store(true, std::memory_order_relaxed);
+            close_after_cancel_ = true;
+            EnableWindow(btn_cancel_, FALSE);
+            SetWindowTextW(lbl_status_, L"正在取消下載，請稍候...");
+        } else {
+            modal_done_ = true;
+        }
+    }
+
+    static LRESULT CALLBACK StaticDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+        UpdateModalWindow* self = nullptr;
+        if (msg == WM_NCCREATE) {
+            auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            self = static_cast<UpdateModalWindow*>(cs->lpCreateParams);
+            self->dlg_hwnd_ = hwnd;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        } else {
+            self = reinterpret_cast<UpdateModalWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        }
+        return self ? self->DlgProc(msg, wParam, lParam) : DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
+    LRESULT DlgProc(UINT msg, WPARAM wParam, LPARAM lParam) {
+        switch (msg) {
+            case WM_CREATE:
+                BuildDialogControls();
+                return 0;
+
+            case WM_CTLCOLORSTATIC: {
+                HDC hdc = reinterpret_cast<HDC>(wParam);
+                HWND ctrl = reinterpret_cast<HWND>(lParam);
+                if (ctrl != edit_notes_) {
+                    SetBkMode(hdc, TRANSPARENT);
+                    return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_BTNFACE));
+                }
+                break;
+            }
+
+            case WM_COMMAND: {
+                int id = LOWORD(wParam);
+                int code = HIWORD(wParam);
+                if (code == BN_CLICKED) {
+                    if (id == kIdDlgBtnDownload) {
+                        StartDownloadWorker();
+                        return 0;
+                    }
+                    if (id == kIdDlgBtnOpenWeb) {
+                        std::wstring url = info_.latest.html_url.empty()
+                                               ? L"https://github.com/" IOS_VCAM_GITHUB_OWNER_W L"/" IOS_VCAM_GITHUB_REPO_W L"/releases/latest"
+                                               : Utf8ToWide(info_.latest.html_url);
+                        ShellExecuteW(dlg_hwnd_, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                        return 0;
+                    }
+                    if (id == kIdDlgBtnCancel || id == IDCANCEL) {
+                        RequestCloseOrCancel();
+                        return 0;
+                    }
+                }
+                break;
+            }
+
+            case kWmDlgProgress: {
+                auto* str = reinterpret_cast<std::wstring*>(lParam);
+                SendMessageW(progress_bar_, PBM_SETPOS, wParam, 0);
+                if (str) {
+                    SetWindowTextW(lbl_status_, str->c_str());
+                    delete str;
+                }
+                return 0;
+            }
+
+            case kWmDlgFinished: {
+                auto* err_str = reinterpret_cast<std::wstring*>(lParam);
+                std::wstring err_msg = err_str ? *err_str : L"";
+                delete err_str;
+
+                if (dl_thread_.joinable()) {
+                    dl_thread_.join();
+                }
+                downloading_ = false;
+
+                if (close_after_cancel_) {
+                    modal_done_ = true;
+                    return 0;
+                }
+
+                if (wParam == 1) {
+                    SendMessageW(progress_bar_, PBM_SETPOS, 1000, 0);
+                    SetWindowTextW(lbl_status_, L"✅ 下載與雜湊驗證完成！正在啟動自動升級程序...");
+                    UpdateWindow(dlg_hwnd_);
+
+                    if (on_stop_capture_) {
+                        on_stop_capture_();
+                    }
+
+                    std::string launch_err;
+                    bool launched = use_setup_exe_
+                                        ? LaunchInstallerUpdate(downloaded_file_, dlg_hwnd_, &launch_err)
+                                        : LaunchPortableZipSelfUpdate(
+                                              downloaded_file_, app_dir_, GetCurrentProcessId(), &launch_err);
+                    if (launched) {
+                        update_launched_ = true;
+                        modal_done_ = true;
+                        return 0;
+                    }
+
+                    std::wstring w_lerr = Utf8ToWide(launch_err);
+                    SetWindowTextW(lbl_status_, (L"⚠️ " + w_lerr).c_str());
+                    EnableWindow(btn_download_, TRUE);
+                    EnableWindow(btn_cancel_, TRUE);
+                    SetWindowTextW(btn_cancel_, L"關閉");
+                } else {
+                    std::wstring fail_txt = L"❌ " + (err_msg.empty() ? L"下載失敗" : err_msg);
+                    SetWindowTextW(lbl_status_, fail_txt.c_str());
+                    EnableWindow(btn_download_, TRUE);
+                    EnableWindow(btn_cancel_, TRUE);
+                    SetWindowTextW(btn_cancel_, L"關閉");
+                    if (!cancel_flag_.load(std::memory_order_relaxed)) {
+                        MessageBoxW(dlg_hwnd_, fail_txt.c_str(), L"下載更新失敗", MB_ICONWARNING | MB_OK);
+                    }
+                }
+                return 0;
+            }
+
+            case WM_CLOSE:
+                RequestCloseOrCancel();
+                return 0;
+        }
+        return DefWindowProcW(hwnd_or_dlg(), msg, wParam, lParam);
+    }
+
+    HWND hwnd_or_dlg() const { return dlg_hwnd_; }
+
+    HINSTANCE hinst_ = nullptr;
+    HWND parent_ = nullptr;
+    HWND dlg_hwnd_ = nullptr;
+    std::filesystem::path app_dir_;
+    UpdateCheckResult info_;
+    UINT dpi_ = 96;
+
+    HFONT font_normal_ = nullptr;
+    HFONT font_bold_ = nullptr;
+    HFONT font_title_ = nullptr;
+    HFONT font_mono_ = nullptr;
+    HICON icon_small_ = nullptr;
+    std::function<void()> on_stop_capture_;
+
+    bool use_setup_exe_ = true;
+    ReleaseAssetInfo target_asset_;
+    std::filesystem::path downloaded_file_;
+
+    HWND edit_notes_ = nullptr;
+    HWND progress_bar_ = nullptr;
+    HWND lbl_status_ = nullptr;
+    HWND btn_download_ = nullptr;
+    HWND btn_web_ = nullptr;
+    HWND btn_cancel_ = nullptr;
+
+    std::atomic<bool> cancel_flag_{false};
+    bool downloading_ = false;
+    bool close_after_cancel_ = false;
+    bool modal_done_ = false;
+    bool update_launched_ = false;
+    std::thread dl_thread_;
+};
+
 class ControlCenterWindow {
 public:
     bool Create(HINSTANCE hInst, int nCmdShow) {
         hinst_ = hInst;
         base_dir_ = AppDir();
         UnblockDownloadedFiles(base_dir_);
+        CleanupOldPortableUpdateFiles(base_dir_);
 
         UINT dpi = GetSystemDpiSafe(nullptr);
         icon_big_ = static_cast<HICON>(LoadImageW(
@@ -273,7 +775,7 @@ public:
         hwnd_ = CreateWindowExW(
             0,
             wc.lpszClassName,
-            L"JCast for iOS v1.4 — 一鍵智慧擷取控制台 (USB 速率辨識 × 2K+ 原生自適應)",
+            L"JCast for iOS v1.5 — 一鍵智慧擷取控制台 (USB 速率辨識 × 2K+ 原生自適應)",
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
             pos_x, pos_y, win_w, win_h,
             nullptr, nullptr, hInst, this);
@@ -444,14 +946,16 @@ private:
 
         int sub_btn_y = main_btn_y + Scale(48, dpi);
         int gap = Scale(8, dpi);
-        int w_mock = (inner_w - gap * 3) * 34 / 100;
-        int w_rep = (inner_w - gap * 3) * 24 / 100;
-        int w_obs = (inner_w - gap * 3) * 22 / 100;
-        int w_uninst = inner_w - gap * 3 - w_mock - w_rep - w_obs;
+        int avail_btn_w = inner_w - gap * 4;
+        int w_mock = avail_btn_w * 23 / 100;
+        int w_rep = avail_btn_w * 21 / 100;
+        int w_obs = avail_btn_w * 17 / 100;
+        int w_upd = avail_btn_w * 22 / 100;
+        int w_uninst = avail_btn_w - w_mock - w_rep - w_obs - w_upd;
 
         int cur_x = margin + btn_pad;
         btn_mock_ = CreateWindowExW(
-            0, L"BUTTON", L"🧪 免插手機自測 (2K 彩條+測試音)",
+            0, L"BUTTON", L"🧪 免手機自測",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             cur_x, sub_btn_y, w_mock, Scale(34, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnMockTest)), hinst_, nullptr);
@@ -467,12 +971,20 @@ private:
         cur_x += w_rep + gap;
 
         btn_obs_guide_ = CreateWindowExW(
-            0, L"BUTTON", L"📋 OBS 設定教學",
+            0, L"BUTTON", L"📋 OBS 教學",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             cur_x, sub_btn_y, w_obs, Scale(34, dpi),
             hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnCopyObsGuide)), hinst_, nullptr);
         SendMessageW(btn_obs_guide_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
         cur_x += w_obs + gap;
+
+        btn_update_ = CreateWindowExW(
+            0, L"BUTTON", L"🔄 檢查更新",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            cur_x, sub_btn_y, w_upd, Scale(34, dpi),
+            hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBtnCheckUpdate)), hinst_, nullptr);
+        SendMessageW(btn_update_, WM_SETFONT, reinterpret_cast<WPARAM>(font_normal_), TRUE);
+        cur_x += w_upd + gap;
 
         btn_uninstall_ = CreateWindowExW(
             0, L"BUTTON", L"🗑 完整移除",
@@ -501,9 +1013,10 @@ private:
         SendMessageW(edit_log_, EM_SETLIMITTEXT, 256 * 1024, 0);
 
         AppendLogLine(
-            L"[歡迎] 歡迎使用 JCast for iOS v1.4！支援依 USB 接口速率自動開放可選最大解析度選項（傳輸中鎖定不自動變動）與 2K+ 原生自適應比例！");
+            L"[歡迎] 歡迎使用 JCast for iOS v1.5！支援 GitHub Releases 自動更新、USB 速率辨識與 2K+ 原生自適應比例！");
         RefreshHealthAndUi(true);
         SetTimer(hwnd_, kTimerRefreshId, 2000, nullptr);
+        SetTimer(hwnd_, kTimerStartupUpdateId, 1500, nullptr);
     }
 
     void PopulateResolutionOptionsForSpeed(UsbLinkSpeed speed, bool is_initial) {
@@ -726,10 +1239,10 @@ private:
         if (running) {
             if (running_mock_) {
                 SetWindowTextW(btn_smart_start_, L"■ 停止自測訊號");
-                SetWindowTextW(btn_mock_, L"■ 停止自測訊號");
+                SetWindowTextW(btn_mock_, L"■ 停止自測");
             } else {
                 SetWindowTextW(btn_smart_start_, L"■ 停止 iPhone 投影擷取（安全切回一般充電/傳輸模式）");
-                SetWindowTextW(btn_mock_, L"🧪 免插手機自測 (2K 彩條+測試音)");
+                SetWindowTextW(btn_mock_, L"🧪 免手機自測");
                 EnableWindow(btn_mock_, FALSE);
             }
             EnableWindow(combo_res_mode_, FALSE);
@@ -737,6 +1250,7 @@ private:
             EnableWindow(combo_audio_, FALSE);
             EnableWindow(chk_hw_decode_, FALSE);
             EnableWindow(btn_repair_, FALSE);
+            EnableWindow(btn_update_, FALSE);
         } else {
             bool needs_setup = (health_.dshow != DshowRegState::Ready) ||
                                !health_.libusb_service_ok ||
@@ -747,13 +1261,14 @@ private:
             } else {
                 SetWindowTextW(btn_smart_start_, L"▶ 開始 iPhone / iPad 有線投影擷取（鎖定所選解析度 @ 60fps）");
             }
-            SetWindowTextW(btn_mock_, L"🧪 免插手機自測 (2K 彩條+測試音)");
+            SetWindowTextW(btn_mock_, L"🧪 免手機自測");
             EnableWindow(btn_mock_, TRUE);
             EnableWindow(combo_res_mode_, TRUE);
             EnableWindow(combo_status_bar_, TRUE);
             EnableWindow(combo_audio_, TRUE);
             EnableWindow(chk_hw_decode_, TRUE);
             EnableWindow(btn_repair_, TRUE);
+            EnableWindow(btn_update_, checking_update_.load(std::memory_order_acquire) ? FALSE : TRUE);
         }
 
         InvalidateRect(hwnd_, &banner_rect_, FALSE);
@@ -846,6 +1361,11 @@ private:
         std::wstring usb_drv_txt = health_.libusb_service_ok
                                        ? L"• WHQL 簽章過濾驅動 (libusb0)：✅ 已就緒"
                                        : L"• WHQL 簽章過濾驅動 (libusb0)：⏳ 待安裝";
+        if (cached_update_.update_available) {
+            usb_drv_txt += L"   ｜   🎉 發現新版 " + Utf8ToWide(cached_update_.latest.tag_name) + L" 可一鍵升級！";
+        } else {
+            usb_drv_txt += L"   ｜   目前版本：v" IOS_VCAM_VER_DISPLAY_WSTR;
+        }
 
         std::wstring speed_badge = FormatUsbSpeedBadgeWide(detected_usb_speed_);
         std::wstring speed_suffix = speed_badge.empty() ? L"" : (L" [" + speed_badge + L"]");
@@ -1149,6 +1669,133 @@ private:
         MessageBoxW(hwnd_, guide, L"JCast for iOS — OBS 設定教學", MB_ICONINFORMATION | MB_OK);
     }
 
+    void OpenUpdateDialog(const UpdateCheckResult& info) {
+        UINT dpi = GetSystemDpiSafe(hwnd_);
+        UpdateModalWindow dlg(
+            hinst_,
+            hwnd_,
+            base_dir_,
+            info,
+            dpi,
+            font_normal_,
+            font_bold_,
+            font_title_,
+            font_mono_,
+            icon_small_,
+            [this]() {
+                if (host_running_.load(std::memory_order_acquire)) {
+                    StopHostProcess();
+                }
+            });
+        if (dlg.RunModal()) {
+            AppendLogLine(L"[軟體更新] 已啟動自動更新程序，正在關閉目前視窗以完成替換...");
+            PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+        }
+    }
+
+    void StartAsyncUpdateCheck(bool manual_trigger) {
+        if (checking_update_.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+        if (manual_trigger) {
+            SetWindowTextW(btn_update_, L"⏳ 檢查中...");
+            EnableWindow(btn_update_, FALSE);
+            AppendLogLine(L"[更新檢查] 正在連線至 GitHub Releases API 檢查最新版本...");
+        }
+
+        if (update_check_thread_.joinable()) {
+            update_check_thread_.join();
+        }
+
+        HWND target_hwnd = hwnd_;
+        update_check_thread_ = std::thread([this, target_hwnd, manual_trigger]() {
+            UpdateCheckResult res = CheckGitHubLatestRelease(
+                IOS_VCAM_GITHUB_OWNER, IOS_VCAM_GITHUB_REPO, IOS_VCAM_VER_DISPLAY_STR);
+            if (shutting_down_.load(std::memory_order_acquire)) {
+                checking_update_.store(false, std::memory_order_release);
+                return;
+            }
+            auto* heap_res = new UpdateCheckResult(std::move(res));
+            if (!PostMessageW(
+                    target_hwnd,
+                    kWmUpdateCheckDone,
+                    manual_trigger ? 1 : 0,
+                    reinterpret_cast<LPARAM>(heap_res))) {
+                delete heap_res;
+                checking_update_.store(false, std::memory_order_release);
+            }
+        });
+    }
+
+    void OnUpdateCheckCompleted(bool manual_trigger, const UpdateCheckResult& res) {
+        checking_update_.store(false, std::memory_order_release);
+        if (!host_running_.load(std::memory_order_acquire)) {
+            EnableWindow(btn_update_, TRUE);
+        }
+
+        if (!res.ok) {
+            std::wstring restore_lbl = cached_update_.update_available
+                                           ? (L"⬆️ 升級 " + Utf8ToWide(cached_update_.latest.tag_name))
+                                           : L"🔄 檢查更新";
+            SetWindowTextW(btn_update_, restore_lbl.c_str());
+
+            if (manual_trigger) {
+                std::wstring werr = Utf8ToWide(res.error_message);
+                AppendLogLine(L"[更新檢查失敗] " + werr);
+                std::wstring prompt =
+                    L"無法從 GitHub Releases API 取得版本資訊：\r\n" + werr +
+                    L"\r\n\r\n是否直接以瀏覽器開啟 GitHub Releases 發布頁面查看？";
+                if (MessageBoxW(hwnd_, prompt.c_str(), L"檢查更新失敗", MB_ICONWARNING | MB_YESNO) == IDYES) {
+                    ShellExecuteW(
+                        hwnd_,
+                        L"open",
+                        L"https://github.com/" IOS_VCAM_GITHUB_OWNER_W L"/" IOS_VCAM_GITHUB_REPO_W L"/releases/latest",
+                        nullptr,
+                        nullptr,
+                        SW_SHOWNORMAL);
+                }
+            }
+            return;
+        }
+
+        cached_update_ = res;
+        if (!res.update_available) {
+            SetWindowTextW(btn_update_, L"🔄 檢查更新");
+            InvalidateRect(hwnd_, &banner_rect_, FALSE);
+            AppendLogLine(
+                L"[更新檢查] 目前已是最新版本 (v" IOS_VCAM_VER_DISPLAY_WSTR L"，GitHub 最新發布：" +
+                Utf8ToWide(res.latest.tag_name) + L")。");
+
+            if (manual_trigger) {
+                std::wstring msg =
+                    L"您目前使用的 JCast for iOS v" IOS_VCAM_VER_DISPLAY_WSTR L" 已是最新版本！\r\n\r\n"
+                    L"• GitHub 最新版本：" + Utf8ToWide(res.latest.tag_name) + L"\r\n" +
+                    (res.latest.published_at.empty()
+                         ? L""
+                         : (L"• 發布時間：" + Utf8ToWide(res.latest.published_at) + L"\r\n")) +
+                    L"\r\n是否開啟 GitHub Releases 網頁查看完整歷史更新日誌？";
+                if (MessageBoxW(hwnd_, msg.c_str(), L"已是最新版本", MB_ICONINFORMATION | MB_YESNO) == IDYES) {
+                    std::wstring url = res.latest.html_url.empty()
+                                           ? L"https://github.com/" IOS_VCAM_GITHUB_OWNER_W L"/" IOS_VCAM_GITHUB_REPO_W L"/releases"
+                                           : Utf8ToWide(res.latest.html_url);
+                    ShellExecuteW(hwnd_, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                }
+            }
+            return;
+        }
+
+        std::wstring up_lbl = L"⬆️ 升級 " + Utf8ToWide(res.latest.tag_name);
+        SetWindowTextW(btn_update_, up_lbl.c_str());
+        InvalidateRect(hwnd_, &banner_rect_, FALSE);
+        AppendLogLine(
+            L"[發現新版本] 🎉 GitHub 已發布 JCast for iOS " + Utf8ToWide(res.latest.tag_name) +
+            L"！點擊「" + up_lbl + L"」即可檢視更新日誌並一鍵自動升級。");
+
+        if (manual_trigger && !host_running_.load(std::memory_order_acquire)) {
+            OpenUpdateDialog(cached_update_);
+        }
+    }
+
     static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         ControlCenterWindow* self = nullptr;
         if (msg == WM_NCCREATE) {
@@ -1189,6 +1836,11 @@ private:
             case WM_TIMER:
                 if (wParam == kTimerRefreshId) {
                     RefreshHealthAndUi(false);
+                } else if (wParam == kTimerStartupUpdateId) {
+                    KillTimer(hwnd_, kTimerStartupUpdateId);
+                    if (!host_running_.load(std::memory_order_acquire)) {
+                        StartAsyncUpdateCheck(false);
+                    }
                 }
                 return 0;
 
@@ -1233,6 +1885,14 @@ private:
                         ShowAndCopyObsGuide();
                         return 0;
                     }
+                    if (id == kIdBtnCheckUpdate) {
+                        if (cached_update_.update_available) {
+                            OpenUpdateDialog(cached_update_);
+                        } else {
+                            StartAsyncUpdateCheck(true);
+                        }
+                        return 0;
+                    }
                     if (id == kIdBtnUninstall) {
                         if (MessageBoxW(
                                 hwnd_,
@@ -1269,10 +1929,24 @@ private:
                 return 0;
             }
 
+            case kWmUpdateCheckDone: {
+                auto* res = reinterpret_cast<UpdateCheckResult*>(lParam);
+                if (res) {
+                    OnUpdateCheckCompleted(wParam != 0, *res);
+                    delete res;
+                }
+                return 0;
+            }
+
             case WM_CLOSE:
+                shutting_down_.store(true, std::memory_order_release);
                 KillTimer(hwnd_, kTimerRefreshId);
+                KillTimer(hwnd_, kTimerStartupUpdateId);
                 if (host_running_.load(std::memory_order_acquire)) {
                     StopHostProcess();
+                }
+                if (update_check_thread_.joinable()) {
+                    update_check_thread_.join();
                 }
                 DestroyWindow(hwnd_);
                 return 0;
@@ -1313,6 +1987,7 @@ private:
     HWND btn_mock_ = nullptr;
     HWND btn_repair_ = nullptr;
     HWND btn_obs_guide_ = nullptr;
+    HWND btn_update_ = nullptr;
     HWND btn_uninstall_ = nullptr;
     HWND edit_log_ = nullptr;
 
@@ -1329,6 +2004,11 @@ private:
     std::atomic<bool> host_running_{false};
     bool running_mock_ = false;
     std::thread log_reader_thread_;
+
+    std::atomic<bool> checking_update_{false};
+    std::atomic<bool> shutting_down_{false};
+    UpdateCheckResult cached_update_;
+    std::thread update_check_thread_;
 };
 
 }  // namespace
@@ -1345,7 +2025,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 
     INITCOMMONCONTROLSEX icc{};
     icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES;
+    icc.dwICC = ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES | ICC_PROGRESS_CLASS;
     InitCommonControlsEx(&icc);
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);

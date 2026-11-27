@@ -1,3 +1,4 @@
+#include "ios_vcam/app_updater.h"
 #include "ios_vcam/coremedia_codec.h"
 #include "ios_vcam/image_convert.h"
 #include "ios_vcam/qt_session.h"
@@ -317,10 +318,73 @@ bool TestUsbSpeedResolutionGatingAndMaxClamp() {
     return true;
 }
 
+bool TestGitHubReleasesJsonAndSemVerUpdater() {
+    // 1. SemVer comparison checks
+    ASSERT_TRUE(!IsRemoteVersionNewer("1.5.0", "v1.5.0"), "Identical version must not trigger update");
+    ASSERT_TRUE(!IsRemoteVersionNewer("1.5.0.0", "v1.4.0"), "Older remote tag must never downgrade");
+    ASSERT_TRUE(!IsRemoteVersionNewer("1.5.0", "v1.5.0-beta.1"), "Pre-release must not outrank final release");
+    ASSERT_TRUE(IsRemoteVersionNewer("1.5.0", "v1.5.1"), "Patch bump should trigger update");
+    ASSERT_TRUE(IsRemoteVersionNewer("1.5.0", "v1.6.0"), "Minor bump should trigger update");
+    ASSERT_TRUE(IsRemoteVersionNewer("1.5.0", "2.0.0"), "Major bump without v prefix should trigger update");
+
+    // 2. Realistic GitHub REST API /releases/latest JSON with nested author/uploader html_url, emoji surrogates, and sha256 digest
+    const char* sample_github_json = R"JSON({
+      "url": "https://api.github.com/repos/joey971018yt/iOS-usb-cam/releases/123456",
+      "html_url": "https://github.com/joey971018yt/iOS-usb-cam/releases/tag/v1.6.0",
+      "tag_name": "v1.6.0",
+      "name": "JCast for iOS v1.6.0 \uD83D\uDE80",
+      "draft": false,
+      "prerelease": false,
+      "published_at": "2026-11-27T02:00:00Z",
+      "author": {
+        "login": "joey971018yt",
+        "html_url": "https://github.com/joey971018yt"
+      },
+      "body": "## What's New\r\n- Fast WinHTTP updater\n- SHA-256 verification",
+      "assets": [
+        {
+          "name": "JCast-for-iOS-Portable-v1.6.0.zip",
+          "size": 1480000,
+          "digest": "sha256:73e2b1258f14c2c9ccfae1b544ea0fd7412ef7060ca1c6ed5bed4b095eac48ec",
+          "browser_download_url": "https://github.com/joey971018yt/iOS-usb-cam/releases/download/v1.6.0/JCast-for-iOS-Portable-v1.6.0.zip",
+          "uploader": { "html_url": "https://github.com/actions-user" }
+        },
+        {
+          "name": "JCast-for-iOS-Setup-v1.6.0.exe",
+          "size": 2850000,
+          "digest": "SHA256:4321E761BB1FFE42930028BD96AFEA0067A089D22DE0A7DB04FB76F4F7F51F99",
+          "browser_download_url": "https://github.com/joey971018yt/iOS-usb-cam/releases/download/v1.6.0/JCast-for-iOS-Setup-v1.6.0.exe"
+        }
+      ]
+    })JSON";
+
+    GitHubReleaseInfo info;
+    std::string err;
+    ASSERT_TRUE(ParseGitHubReleaseJson(sample_github_json, info, &err),
+                ("Failed to parse GitHub release JSON: " + err).c_str());
+    ASSERT_TRUE(info.tag_name == "v1.6.0", "Parsed tag_name mismatch");
+    ASSERT_TRUE(info.html_url == "https://github.com/joey971018yt/iOS-usb-cam/releases/tag/v1.6.0",
+                "Top-level html_url must not collide with nested author.html_url");
+    ASSERT_TRUE(info.title.find("\xF0\x9F\x9A\x80") != std::string::npos,
+                "UTF-16 surrogate pair \\uD83D\\uDE80 should decode to UTF-8 rocket emoji");
+    ASSERT_TRUE(!info.draft && !info.prerelease, "Draft/prerelease flags should be false");
+    ASSERT_TRUE(info.assets.size() == 2, "Expected 2 parsed release assets");
+    ASSERT_TRUE(info.setup_exe.name == "JCast-for-iOS-Setup-v1.6.0.exe" && info.setup_exe.size_bytes == 2850000ULL,
+                "Setup.exe asset selection mismatch");
+    ASSERT_TRUE(info.setup_exe.sha256_hex == "4321e761bb1ffe42930028bd96afea0067a089d22de0a7db04fb76f4f7f51f99",
+                "Expected normalized lowercase 64-char SHA-256 hex for Setup.exe");
+    ASSERT_TRUE(info.portable_zip.name == "JCast-for-iOS-Portable-v1.6.0.zip" &&
+                    info.portable_zip.size_bytes == 1480000ULL,
+                "Portable.zip asset selection mismatch");
+    ASSERT_TRUE(IsRemoteVersionNewer("1.5.0", info.tag_name), "v1.6.0 should be detected as newer than 1.5.0");
+
+    return true;
+}
+
 }  // namespace
 
 int main() {
-    std::cout << "[JCast for iOS] Running protocol, USB speed gating & 2K+ adaptive pipeline unit tests...\n";
+    std::cout << "[JCast for iOS] Running protocol, USB speed gating, updater & 2K+ pipeline unit tests...\n";
     if (!TestExactQuickTimeHexVectors()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestExactQuickTimeHexVectors\n";
     if (!TestSpsResolutionAndAvccConversion()) return EXIT_FAILURE;
@@ -331,6 +395,8 @@ int main() {
     std::cout << "  [PASS] Test2KPlusAdaptiveAspectAndMultiReaderIpc\n";
     if (!TestUsbSpeedResolutionGatingAndMaxClamp()) return EXIT_FAILURE;
     std::cout << "  [PASS] TestUsbSpeedResolutionGatingAndMaxClamp\n";
+    if (!TestGitHubReleasesJsonAndSemVerUpdater()) return EXIT_FAILURE;
+    std::cout << "  [PASS] TestGitHubReleasesJsonAndSemVerUpdater\n";
     std::cout << "[JCast for iOS] All tests passed successfully!\n";
     return EXIT_SUCCESS;
 }

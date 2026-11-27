@@ -22,7 +22,7 @@ jobs:
       - name: Build Release binaries (MSVC)
         run: cmake --build build-msvc --config Release --parallel
 
-      - name: Run protocol, USB speed gating & media pipeline unit tests on Windows
+      - name: Run protocol, USB speed gating, updater & media pipeline unit tests on Windows
         run: .\build-msvc\Release\ios_vcam_tests.exe
 
       - name: Stage native MSVC App & Portable bundle
@@ -46,7 +46,7 @@ jobs:
             Copy-Item "dist-win64\drivers\*" "release-msvc-win64\drivers\"
           }
 
-          # Create clean Portable App ZIP (JCast-for-iOS-Portable-v1.4.0.zip)
+          # Create clean Portable App ZIP (JCast-for-iOS-Portable-v1.5.0.zip)
           New-Item -ItemType Directory -Force -Path "build-installer\JCast-for-iOS" | Out-Null
           Copy-Item "release-msvc-win64\JCast for iOS.exe" "build-installer\JCast-for-iOS\"
           Copy-Item "release-msvc-win64\ios_vcam_gui.exe" "build-installer\JCast-for-iOS\"
@@ -57,7 +57,7 @@ jobs:
           Copy-Item "release-msvc-win64\README.md" "build-installer\JCast-for-iOS\"
           Copy-Item "release-msvc-win64\CHANGELOG.md" "build-installer\JCast-for-iOS\"
           Copy-Item -Recurse "release-msvc-win64\drivers" "build-installer\JCast-for-iOS\drivers"
-          Compress-Archive -Path "build-installer\JCast-for-iOS" -DestinationPath "build-installer\JCast-for-iOS-Portable-v1.4.0.zip" -Force
+          Compress-Archive -Path "build-installer\JCast-for-iOS" -DestinationPath "build-installer\JCast-for-iOS-Portable-v1.5.0.zip" -Force
 
       - name: Build Windows App Setup.exe via Inno Setup 6
         shell: pwsh
@@ -78,45 +78,46 @@ jobs:
           name: jcast-for-ios-app-packages
           path: |
             release-msvc-win64/
-            build-installer/JCast-for-iOS-Setup-v1.4.0.exe
-            build-installer/JCast-for-iOS-Portable-v1.4.0.zip
+            build-installer/JCast-for-iOS-Setup-v1.5.0.exe
+            build-installer/JCast-for-iOS-Portable-v1.5.0.zip
 
-      - name: Publish JCast for iOS Setup.exe & Portable.zip to GitHub Release v1.4.0
+      - name: Publish JCast for iOS Setup.exe & Portable.zip to GitHub Release v1.5.0
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           $notes = @"
-          ## 🚀 JCast for iOS v1.4.0 — Windows 10 / 11 正式版 App 下載
+          ## 🚀 JCast for iOS v1.5.0 — Windows 10 / 11 正式版 App 下載
 
-          ### ✨ v1.4.0 重點更新
-          - **正式更名為「JCast for iOS」**：包含桌面與開始選單 App 捷徑、安裝程式與 OBS 虛擬擷取卡（`JCast for iOS (Video)` / `JCast for iOS (Audio)`，保留相同底層 COM CLSID 無縫相容既有場景）。
-          - **USB 接口速率智慧辨識 × 可選最大解析度分級開放**：
-            - 插入 iPhone / iPad 時透過 `libusb_get_device_speed` 非侵入式辨識連接埠與線材速率（`USB 3.x 5~20Gbps` / `USB 2.0 480Mbps` / `USB 1.1 12Mbps`），並於橫幅即時顯示。
-            - 僅於**開始擷取前**依據接口速率動態開放下拉選單的**可選最大解析度上限**（USB 3.x 解鎖最高 `3840p`、USB 2.0 最高開放 `2K 2560p`、USB 1.1 最高開放 `720p 1280p`）；**一旦開始傳輸即全程鎖定所選解析度，絕不在直播傳輸途中自動切換解析度**，確保 OBS 畫布與直播畫面零閃爍。
+          ### ✨ v1.5.0 重點更新
+          - **串接 GitHub Releases API 內建一鍵軟體自動更新**：
+            - 啟動待機時自動於背景檢查最新版本（絕不干擾擷取傳輸），亦可隨時點擊 **`🔄 檢查更新`** 手動查詢。
+            - 內建原生更新視窗：可直接預覽完整版本更新日誌（Release Notes）、即時顯示下載進度條與 MB 速率，並透過 Windows `BCrypt` 自動驗證 GitHub API 回傳的 **`SHA-256` 數位雜湊值**確保檔案完整無損。
+            - **雙模式智慧升級**：若您使用正式安裝版（`Setup.exe`），下載完成後自動啟動安裝升級精靈；若您使用免安裝便攜版（`Portable.zip`），自動於背景解壓並原地替換升級後重新啟動 App！
+          - 完整包含 v1.4.0 品牌升級 **「JCast for iOS」** 與 **USB 接口速率智慧辨識 × 可選最大解析度分級開放**（傳輸期間嚴格鎖定不變動）。
 
           ---
 
           ### 📦 下載檔案說明
-          1. **推薦下載：`JCast-for-iOS-Setup-v1.4.0.exe`（正式安裝版 App）**
+          1. **推薦下載：`JCast-for-iOS-Setup-v1.5.0.exe`（正式安裝版 App）**
              - 雙擊一鍵安裝，自動在**桌面**與**開始選單**建立帶有專屬高解析度圖示的 **「JCast for iOS」** App，並完成虛擬擷取卡與微軟 WHQL 簽章驅動服務部署。
-          2. **免安裝選擇：`JCast-for-iOS-Portable-v1.4.0.zip`（綠色便攜版 App）**
+          2. **免安裝選擇：`JCast-for-iOS-Portable-v1.5.0.zip`（綠色便攜版 App）**
              - 解壓縮後直接雙擊資料夾內的 **`JCast for iOS.exe`** 即可使用。
           "@
-          gh release view v1.4.0 >$null 2>&1
+          gh release view v1.5.0 >$null 2>&1
           if ($LASTEXITCODE -eq 0) {
-            gh release edit v1.4.0 `
-              --title "JCast for iOS v1.4.0 (USB 接口速率辨識 × 2K+ 原生自適應 App)" `
+            gh release edit v1.5.0 `
+              --title "JCast for iOS v1.5.0 (GitHub 自動更新 × USB 速率辨識 × 2K+ 原生自適應)" `
               --notes $notes
-            gh release upload v1.4.0 `
-              "build-installer\JCast-for-iOS-Setup-v1.4.0.exe" `
-              "build-installer\JCast-for-iOS-Portable-v1.4.0.zip" `
+            gh release upload v1.5.0 `
+              "build-installer\JCast-for-iOS-Setup-v1.5.0.exe" `
+              "build-installer\JCast-for-iOS-Portable-v1.5.0.zip" `
               --clobber
           } else {
-            gh release create v1.4.0 `
-              "build-installer\JCast-for-iOS-Setup-v1.4.0.exe" `
-              "build-installer\JCast-for-iOS-Portable-v1.4.0.zip" `
-              --title "JCast for iOS v1.4.0 (USB 接口速率辨識 × 2K+ 原生自適應 App)" `
+            gh release create v1.5.0 `
+              "build-installer\JCast-for-iOS-Setup-v1.5.0.exe" `
+              "build-installer\JCast-for-iOS-Portable-v1.5.0.zip" `
+              --title "JCast for iOS v1.5.0 (GitHub 自動更新 × USB 速率辨識 × 2K+ 原生自適應)" `
               --notes $notes
           }
