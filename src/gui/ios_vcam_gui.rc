@@ -3,7 +3,7 @@
 
 IDI_APP_MAIN_ICON ICON "../../assets/app_icon.ico"
 
-#ifndef _MSC_VER
+#ifdef IOS_VCAM_EMBED_RC_MANIFEST
 1 24 "ios_vcam_gui.manifest"
 #endif
 

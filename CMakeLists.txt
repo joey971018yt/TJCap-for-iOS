@@ -156,6 +156,7 @@ if(WIN32)
         winmm
     )
     if(MINGW)
+        target_compile_definitions(ios_vcam_gui PRIVATE IOS_VCAM_EMBED_RC_MANIFEST=1)
         target_link_options(ios_vcam_gui PRIVATE -static -static-libgcc -static-libstdc++)
     endif()
 endif()
