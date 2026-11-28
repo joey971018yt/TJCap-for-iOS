@@ -5,6 +5,10 @@
 <h1 align="center">TJCap for iOS v2.0.0</h1>
 
 <p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache-2.0" /></a>
+</p>
+
+<p align="center">
   <b>Windows 10 / 11 專用 — iPhone / iPad 有線 USB 速率智慧辨識 × 2K+ 原生自適應虛擬擷取卡 App（繁體中文 / English 雙語 · 智慧故障報錯 · 即時健康度儀表板 · 原畫質截圖）</b><br/>
   免實體擷取卡 · 免越獄 · 免裝手機端 App · 免開測試模式 · GPU 異常自動軟解自癒 · 內建 GitHub 一鍵自動更新與雙語即時切換<br/>
   <sub>（原 <code>JCast for iOS</code>，自 <code>v2.0.0</code> 起正式更名為 <b>TJCap for iOS</b>）</sub>
@@ -68,3 +72,12 @@
 * **`v1.2.0` (2026-11-26)**：新增 **2K+ 裝置原生解析度與真實比例自適應**（滿版無黑邊）、控制台畫質比例切換，以及即時 `Mbps` 碼率監控。
 * **`v1.1.0` (2026-11-26)**：新增 **Windows 原生一鍵智慧圖形化控制台**、電腦耳機零延遲音訊監聽選單，並改用微軟官方 Visual Studio (`MSVC`) 原生編譯消除防毒誤報。
 * **`v1.0.0` (2026-11-26)**：初版發布，實作 Apple QuickTime / Valeria (`SubClass 0x2A`) 有線鏡像協定、免測試模式安全 `libusb0` UpperFilter 掛載器、`D3D11VA` 硬體解碼與雙路 DirectShow 視訊＋音訊虛擬擷取卡。
+
+---
+
+## 五、開源授權 (License)
+
+本專案原始碼採用 **[Apache License 2.0](LICENSE)** 開源授權條款發布（詳見 [LICENSE](LICENSE) 與 [NOTICE](NOTICE)）：
+
+- 您可以自由使用、修改、散布與進行商業應用，只需保留原版權聲明與授權條款，並在修改處標明變更即可；同時包含明確的專利授權與免責聲明。
+- 隨附獨立載入之第三方元件（`libusb-1.0.dll`、`libusb0.sys` / `libusb0.dll`）各依其原開源授權條款獨立授權，請參閱 **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)**。

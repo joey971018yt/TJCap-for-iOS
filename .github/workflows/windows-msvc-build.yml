@@ -39,6 +39,8 @@ jobs:
           Copy-Item "scripts\uninstall_all_admin.ps1" "release-msvc-win64\"
           Copy-Item "README.md" "release-msvc-win64\"
           Copy-Item "CHANGELOG.md" "release-msvc-win64\"
+          Copy-Item "LICENSE" "release-msvc-win64\"
+          Copy-Item "NOTICE" "release-msvc-win64\"
           Copy-Item "THIRD_PARTY_NOTICES.md" "release-msvc-win64\"
           if (Test-Path "dist-win64\libusb-1.0.dll") {
             Copy-Item "dist-win64\libusb-1.0.dll" "release-msvc-win64\"
@@ -57,6 +59,8 @@ jobs:
           Copy-Item "release-msvc-win64\libusb-1.0.dll" "build-installer\TJCap-for-iOS\"
           Copy-Item "release-msvc-win64\README.md" "build-installer\TJCap-for-iOS\"
           Copy-Item "release-msvc-win64\CHANGELOG.md" "build-installer\TJCap-for-iOS\"
+          Copy-Item "release-msvc-win64\LICENSE" "build-installer\TJCap-for-iOS\"
+          Copy-Item "release-msvc-win64\NOTICE" "build-installer\TJCap-for-iOS\"
           Copy-Item "release-msvc-win64\THIRD_PARTY_NOTICES.md" "build-installer\TJCap-for-iOS\"
           Copy-Item -Recurse "release-msvc-win64\drivers" "build-installer\TJCap-for-iOS\drivers"
           Compress-Archive -Path "build-installer\TJCap-for-iOS" -DestinationPath "build-installer\TJCap-for-iOS-Portable-v2.0.0.zip" -Force

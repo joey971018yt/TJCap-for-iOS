@@ -39,6 +39,8 @@ Source: "..\release-msvc-win64\ios_vcam_dshow.dll"; DestDir: "{app}"; Flags: ign
 Source: "..\release-msvc-win64\libusb-1.0.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\release-msvc-win64\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\release-msvc-win64\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release-msvc-win64\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release-msvc-win64\NOTICE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\release-msvc-win64\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\release-msvc-win64\drivers\*"; DestDir: "{app}\drivers"; Flags: ignoreversion recursesubdirs createallsubdirs
 
